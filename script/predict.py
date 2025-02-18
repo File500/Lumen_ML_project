@@ -65,6 +65,7 @@ def main():
         print("Usage: python script.py <folder_path> <csv_filename>")
         sys.exit(1)
 
+    ## add for final solution (now the full path needs to be passed to function) -> folder_path = ./ + folder_path 
     folder_path = sys.argv[1]
     csv_filename_output = sys.argv[2]
 
