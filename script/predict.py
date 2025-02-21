@@ -34,21 +34,16 @@ class CNN_batch(nn.Module):
 def analyse_folder_data(jpg_files, test_data) -> pd.DataFrame:
 
     solution = pd.DataFrame(columns=['image_name', 'model_prediction'])
-    resize_size = (1500,1500)
+    resize_size = (640,480)
     Model = CNN_batch()
-
-    ### temp. just for script test
-    counter = 10
-    mock_pred = 1
-    ###
 
     for jpg_file in jpg_files:
         try:
 
             current_image = Image.open(jpg_file)
-            # metadata will be located so it can be added to csv if needed
+
             image_metadata = test_data.loc[test_data.image_name == jpg_file.stem]
-            # just an example of transform, does not need to be like this in the final script
+
             transform = transforms.Compose([transforms.Resize(resize_size, PIL.Image.LANCZOS),
                                                  transforms.Grayscale(),
                                                  transforms.ToTensor()])
@@ -57,19 +52,13 @@ def analyse_folder_data(jpg_files, test_data) -> pd.DataFrame:
 
             model_output = Model(composed_image_tensor)
             _, yhat = torch.max(model_output.data, 1)
-            # yhat = torch.tensor(mock_pred)  
+            # yhat = torch.tensor(mock_pred)
 
             solution.loc[len(solution)] = [jpg_file.stem, yhat.item()]
 
         except Exception as e:
             print(f"Error processing {jpg_file.name}: {e}")
             continue
-
-        ### temp. just for script test
-        counter -= 1
-        if counter == 0:
-            break
-        ###
 
     return solution
 
