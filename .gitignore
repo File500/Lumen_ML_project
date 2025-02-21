@@ -32,6 +32,9 @@ MANIFEST
 *.manifest
 *.spec
 
+#data
+/data/ISIC_2020_Training_JPEG/train/*.jpg
+
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
