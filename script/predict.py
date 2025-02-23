@@ -44,9 +44,7 @@ def analyse_folder_data(jpg_files, test_data) -> pd.DataFrame:
 
             image_metadata = test_data.loc[test_data.image_name == jpg_file.stem]
 
-            transform = transforms.Compose([transforms.Resize(resize_size, PIL.Image.LANCZOS),
-                                                 transforms.Grayscale(),
-                                                 transforms.ToTensor()])
+            transform = transforms.Compose([transforms.Resize(resize_size, PIL.Image.LANCZOS), transforms.ToTensor()])
 
             composed_image_tensor = transform(current_image)
 
