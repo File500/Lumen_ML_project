@@ -25,8 +25,18 @@ def train():
 
     #Add hyperparamethers for model training
     trainer = ModelTrainer(
-        
+        training_data= "",
+        validation_data="",
+        test_data="",
+        training_batch_size=config_dict["TRAINING_BATCH_SIZE"],
+        num_workers=config_dict["NUM_WORKERS"],
+        shuffle=config_dict["SHUFFLE"],
+        training_checkpoint_data_count=config_dict["TRAINING_CHECKPOINT_DATA_COUNT"],
+        validation_checkpoint_data_count=config_dict["VALIDATION_SPLIT_DATA_COUNT"],
+        loss_fn=nn.BCEWithLogitsLoss(),
+        epochs_to_train=config_dict["EPOCHS_TO_TRAIN"]
     )
 
+    
     trainer.train()
     
