@@ -10,6 +10,9 @@ from torch.utils.data import DataLoader
 from model.model import MelanomaClassifier 
 import PIL
 from PIL import Image
+import tqdm
+import ignite
+
 
 
 def load_model(model_path, model, optimizer):
