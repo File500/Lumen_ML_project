@@ -22,61 +22,66 @@ def compare_patient_skin_images(image1_path, image2_path):
     img1 = Image.open(image1_path)
     img2 = Image.open(image2_path)
 
-    # Standardize images to a common size for comparison
-    standard_size = (640, 480)  # Adjust based on your typical image resolution
-
-    # Create copies before resizing - thumbnail() modifies in place and returns None
-    img1_resized = img1.copy()
-    img2_resized = img2.copy()
-
-    # Apply thumbnail to the copies
-    img1_resized.thumbnail(standard_size)
-    img2_resized.thumbnail(standard_size)
+    # No resizing needed as images are already standardized to 224x224
 
     # Convert to RGB if needed
-    if img1_resized.mode != 'RGB':
-        img1_resized = img1_resized.convert('RGB')
-    if img2_resized.mode != 'RGB':
-        img2_resized = img2_resized.convert('RGB')
+    if img1.mode != 'RGB':
+        img1 = img1.convert('RGB')
+    if img2.mode != 'RGB':
+        img2 = img2.convert('RGB')
 
     # Calculate multiple perceptual hashes (more robust for medical images)
-    phash1 = imagehash.phash(img1_resized)
-    phash2 = imagehash.phash(img2_resized)
+    phash1 = imagehash.phash(img1, hash_size=8)  # Power of 2 (8x8 = 64 bits)
+    phash2 = imagehash.phash(img2, hash_size=8)
     phash_diff = phash1 - phash2
 
     # Average hash is more sensitive to color changes (important for skin conditions)
-    ahash1 = imagehash.average_hash(img1_resized, hash_size=12)  # Larger hash size for more detail
-    ahash2 = imagehash.average_hash(img2_resized, hash_size=12)
+    ahash1 = imagehash.average_hash(img1, hash_size=8)  # Power of 2 (8x8 = 64 bits)
+    ahash2 = imagehash.average_hash(img2, hash_size=8)
     ahash_diff = ahash1 - ahash2
 
     # Wavelet hash is good for capturing texture differences
-    whash1 = imagehash.whash(img1_resized)
-    whash2 = imagehash.whash(img2_resized)
+    whash1 = imagehash.whash(img1, hash_size=8)  # Must be power of 2
+    whash2 = imagehash.whash(img2, hash_size=8)
     whash_diff = whash1 - whash2
 
     # Color histogram comparison (important for skin tone/condition changes)
-    hist1 = img1_resized.histogram()
-    hist2 = img2_resized.histogram()
+    # Using a more detailed histogram with more bins
+    hist1 = [val for channel in img1.split() for val in channel.histogram()]
+    hist2 = [val for channel in img2.split() for val in channel.histogram()]
     hist_diff = sqrt(sum((a - b) ** 2 for a, b in zip(hist1, hist2)) / len(hist1))
+
+    # Calculate structural similarity (SSIM) for added accuracy
+    # This requires numpy and scikit-image
+    try:
+        from skimage.metrics import structural_similarity as ssim
+        import numpy as np
+        img1_array = np.array(img1)
+        img2_array = np.array(img2)
+        ssim_value = ssim(img1_array, img2_array, channel_axis=2, data_range=255)
+        ssim_diff = 1 - ssim_value  # Convert to difference (0 = identical, 1 = completely different)
+    except ImportError:
+        ssim_diff = None
 
     return {
         "perceptual_hash_diff": phash_diff,
         "average_hash_diff": ahash_diff,
         "wavelet_hash_diff": whash_diff,
         "histogram_diff": hist_diff,
+        "ssim_diff": ssim_diff,
         "combined_hash_score": (phash_diff + ahash_diff + whash_diff) / 3
     }
 
 def evaluate_skin_condition_similarity(image1_path, image2_path):
     result = compare_patient_skin_images(image1_path, image2_path)
 
-    # Medical image thresholds - more lenient than general photo comparison
-    # because we expect some variation in conditions
-    phash_threshold = 15  # More lenient for skin images
-    ahash_threshold = 18  # Color-sensitive hash
-    whash_threshold = 15  # Texture-sensitive hash
-    hist_threshold = 400  # More lenient for lighting variations
-    combined_threshold = 15
+    # Significantly stricter thresholds for standardized 224x224 images
+    phash_threshold = 18
+    ahash_threshold = 10
+    whash_threshold = 8
+    hist_threshold = 200
+    combined_threshold = 8
+    ssim_threshold = 0.25
 
     # Print detailed results
     print(f"Perceptual hash difference: {result['perceptual_hash_diff']}")
@@ -84,11 +89,16 @@ def evaluate_skin_condition_similarity(image1_path, image2_path):
     print(f"Wavelet hash difference: {result['wavelet_hash_diff']}")
     print(f"Histogram difference: {result['histogram_diff']}")
     print(f"Combined hash score: {result['combined_hash_score']}")
+    if result['ssim_diff'] is not None:
+        print(f"SSIM difference: {result['ssim_diff']}")
 
-    # Assess condition similarity using multiple metrics
-    if (result['combined_hash_score'] < combined_threshold or
-            (result['perceptual_hash_diff'] < phash_threshold and
-             result['wavelet_hash_diff'] < whash_threshold)):
+    # Stricter assessment criteria with multiple conditions that must be satisfied
+    if ((result['combined_hash_score'] < combined_threshold) and
+            (result['perceptual_hash_diff'] < phash_threshold) and
+            (result['average_hash_diff'] < ahash_threshold) and
+            (result['wavelet_hash_diff'] < whash_threshold) and
+            (result['histogram_diff'] < hist_threshold) and
+            (result['ssim_diff'] is None or result['ssim_diff'] < ssim_threshold)):
         print("Assessment: Images show similar skin condition")
         return True
     else:
