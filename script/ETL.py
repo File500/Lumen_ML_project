@@ -122,7 +122,7 @@ duplicates_new_df = pd.DataFrame(columns=['image_name_1', 'image_name_2'])
 non_existant_images = []
 
 unique_ids = grouped_metadata['patient_id'].tolist()
-path = '../../Lumen_Image_Data/train/'
+path = '../../train_224X224/'
 new_rows = []
 
 for id in unique_ids:
