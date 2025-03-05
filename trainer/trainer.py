@@ -7,6 +7,7 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 from torch.utils.data import DataLoader
 from model.model import MelanomaClassifier
+from model.pretrained_model import PretrainedMelanomaClassifier
 from modelTrainer import ModelTrainer
 
 
@@ -23,6 +24,10 @@ def train():
         config_dict = json.load(config_file)
 
 
+    # Load the model
+    model = PretrainedMelanomaClassifier(num_classes=2)
+    optimizer = optim.Adam(model.parameters(), lr=config_dict["LEARNING_RATE"])
+
     #Add hyperparamethers for model training
     trainer = ModelTrainer(
         training_data= "",
@@ -34,7 +39,9 @@ def train():
         training_checkpoint_data_count=config_dict["TRAINING_CHECKPOINT_DATA_COUNT"],
         validation_checkpoint_data_count=config_dict["VALIDATION_SPLIT_DATA_COUNT"],
         loss_fn=nn.BCEWithLogitsLoss(),
-        epochs_to_train=config_dict["EPOCHS_TO_TRAIN"]
+        epochs_to_train=config_dict["EPOCHS_TO_TRAIN"],
+        model = model,
+        optimizer = optimizer
     )
 
     
