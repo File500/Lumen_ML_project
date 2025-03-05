@@ -11,9 +11,8 @@ from model.model import MelanomaClassifier
 import PIL
 from PIL import Image
 import tqdm
-import ignite
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-
+# import ignite
 
 
 
