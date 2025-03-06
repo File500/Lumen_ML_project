@@ -6,10 +6,10 @@ from PIL import Image
 import io
 
 # Configuration
-csv_path = '/home/lukasculac/Desktop/Projekti/LUMEN/new_training_duplicates.csv'  # Path to your CSV file
-image_dir = '/home/lukasculac/Desktop/Projekti/LUMEN/train_224x224/'  # Path to your image directory
-output_html = 'image_pairs_viewer.html'  # Output HTML file
-limit = 100  # Number of image pairs to display
+csv_path = './etl_data/new_training_duplicates.csv'
+image_dir = '../data/train_224x224/'
+output_html = 'image_pairs_viewer.html'
+limit = 200  # Number of image pairs to display
 
 # Create HTML templates
 html_header = """
