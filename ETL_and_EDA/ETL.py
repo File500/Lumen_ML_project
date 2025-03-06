@@ -175,5 +175,5 @@ duplicates_new_df = pd.concat([duplicates_new_df, new_df], ignore_index=True)
 
 df_nex = pd.DataFrame(non_existant_images, columns=['do_not_exist'])
 
-df_nex.to_csv('nonexistent_images.csv', index=False)
-duplicates_new_df.to_csv('new_training_duplicates.csv', index=False)
+df_nex.to_csv('./etl_data/nonexistent_images.csv', index=False)
+duplicates_new_df.to_csv('./etl_data/new_training_duplicates.csv', index=False)
