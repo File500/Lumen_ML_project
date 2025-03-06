@@ -53,7 +53,7 @@ def combine_image_pair_datasets(file_paths, output_path=None):
 
 def main():
     dataset_paths = [
-        "./new_training_duplicates.csv",
+        "./etl_data/new_training_duplicates.csv",
         "../data/ISIC_2020_Training_Duplicates.csv"
     ]
 
