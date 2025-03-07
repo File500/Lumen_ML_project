@@ -85,6 +85,6 @@ def mask_dark_pixels(image_path, output_path=None, threshold=30, inpaint_radius=
     return img_rgb, mask, result
 
 
-original, mask, processed = mask_dark_pixels('../../Lumen_Image_Data/train/ISIC_0082348.jpg', threshold=70)
+original, mask, processed = mask_dark_pixels('../../../Lumen_Image_Data/train/ISIC_0082348.jpg', threshold=70)
 
-original, mask, processed = mask_dark_pixels('../../Lumen_Image_Data/train/ISIC_0134357.jpg', threshold=70)
+original, mask, processed = mask_dark_pixels('../../../Lumen_Image_Data/train/ISIC_0134357.jpg', threshold=70)
