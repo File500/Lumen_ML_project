@@ -1,0 +1,25 @@
+HOW TO use this folder
+
+monk_skin_color_clustering
+    classify images using K-means clustering 
+    when run u get new csv with new column skin type
+
+monk_pretrained_model
+    if some pretrained model is available you can use ran this script
+
+create_monk_skin_tone_training_data
+    uses when you already have labeled datda to get balanced labeled dataset for training new model for this purpose
+    best used after running clustering
+
+monk_skin_tone_main
+     it will:
+        Use a pre-trained model if available
+        Train a new model from labeled data if available
+        Fall back to clustering if neither is available
+    use this if you dont know what to do
+
+Suggested Approach:
+    Run clustering on a subset: monk_skin_color_clustering.py
+    Create labeled data: create_monk_skin_tone_training_data.py
+    Train a model: trainer/monk_skin_tone_training.py
+    Classify all images with the model: monk_skin_tone_main.py
