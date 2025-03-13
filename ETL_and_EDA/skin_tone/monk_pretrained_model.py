@@ -8,6 +8,9 @@ from torchvision import models, transforms
 from PIL import Image
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from model.skin_tone_model import SkinToneClassifier
 
 # Define image transformations for the pre-trained model
@@ -35,7 +38,7 @@ def load_pretrained_model(model_path):
     
     # Load the model
     model.load_state_dict(torch.load(model_path, map_location=device))
-    print(f"Loaded model from {model_path}")
+    print(f"Loaded MobileNetV2 model from {model_path}")
     
     model.to(device)
     model.eval()
@@ -103,7 +106,7 @@ def process_dataset_with_model(csv_path, image_folder, output_folder, model, dev
     results = []
     
     # Process each image
-    print("Processing images with pre-trained model...")
+    print("Processing images with pre-trained MobileNetV2 model...")
     for index, row in tqdm(df.iterrows(), total=len(df)):
         image_name = row['image_name']
         
@@ -144,7 +147,7 @@ def process_dataset_with_model(csv_path, image_folder, output_folder, model, dev
     final_df = pd.merge(df, results_df, on='image_name', how='inner')
     
     # Save to CSV
-    output_path = os.path.join(output_folder, 'isic2020_with_monk_skin_types.csv')
+    output_path = os.path.join(output_folder, 'ISIC_2020_model_output_with_monk_skin_types.csv')
     final_df.to_csv(output_path, index=False)
     print(f"Results saved to {output_path}")
     
@@ -167,7 +170,7 @@ def visualize_results(results_df, image_folder, output_folder):
     skin_type_counts = results_df['predicted_skin_type'].value_counts().sort_index()
     skin_type_counts.plot(kind='bar', color='skyblue')
     
-    plt.title('Distribution of Predicted Monk Skin Types')
+    plt.title('Distribution of Predicted Monk Skin Types (MobileNetV2)')
     plt.xlabel('Monk Skin Type (1-10)')
     plt.ylabel('Count')
     plt.xticks(rotation=0)
@@ -190,10 +193,10 @@ def visualize_results(results_df, image_folder, output_folder):
             continue
             
         # Take up to 9 samples
-        samples = type_df.sample(min(9, len(type_df)))
+        samples = type_df.sample(min(50, len(type_df)))
         
         # Determine grid size based on number of samples
-        grid_size = min(3, int(np.ceil(np.sqrt(len(samples)))))
+        grid_size = min(10, int(np.ceil(np.sqrt(len(samples)))))
         fig, axes = plt.subplots(grid_size, grid_size, figsize=(12, 12))
         
         # Handle case of single image
@@ -236,17 +239,19 @@ def visualize_results(results_df, image_folder, output_folder):
 def main():
     """Main function to run the script."""
     # Get the project root directory
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     
     # Define paths
     data_dir = os.path.join(project_root, 'data')
     csv_path = os.path.join(data_dir, 'ISIC_2020_Training_GroundTruth_v2.csv')
     image_folder = os.path.join(data_dir, 'train_224X224')
-    output_folder = os.path.join(data_dir, 'skin_type_analysis')
+    output_folder = os.path.join(data_dir, 'skin_type_analysis', 'model_predictions')
     model_folder = os.path.join(project_root, 'trained_model')
+
+    os.makedirs(output_folder, exist_ok=True)
     
     # Path to pre-trained model
-    model_path = os.path.join(model_folder, 'monk_skin_tone_model.pth')
+    model_path = os.path.join(model_folder, 'best_monk_skin_tone_model.pth')
     
     # Load pre-trained model
     model, device = load_pretrained_model(model_path)
@@ -256,9 +261,9 @@ def main():
     
     # Print summary
     if results_df is not None:
-        print("\nModel-based classification complete!")
+        print("\nMobileNetV2 model-based classification complete!")
         print(f"Processed {len(results_df)} images.")
-        print(f"Results saved to {os.path.join(output_folder, 'isic2020_with_monk_skin_types.csv')}")
+        print(f"Results saved to {os.path.join(output_folder, 'ISIC_2020_model_output_with_monk_skin_types.csv')}")
         
         print("\nMonk Skin Type Distribution:")
         print(results_df['predicted_skin_type'].value_counts().sort_index())

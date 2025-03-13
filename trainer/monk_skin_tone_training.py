@@ -8,7 +8,11 @@ from PIL import Image
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from model.skin_tone_model import SkinToneClassifier
+from sklearn.metrics import classification_report, precision_score, recall_score, f1_score, confusion_matrix
 
 # Define image transformations for training
 def get_transforms():
@@ -19,17 +23,19 @@ def get_transforms():
         #                     std=[0.229, 0.224, 0.225])
     ])
 
+# Create dataset class
 
-def train_model(training_data_path, output_model_path):
+
+def train_model(training_data_path, output_model_path, output_best_model_path, image_folder):
     """
-    Train a skin tone classification model from labeled data.
+    Train a skin tone classification model from labeled data with train/validation/test split.
     
     Args:
         training_data_path: Path to training data with labeled skin types
         output_model_path: Path to save the trained model
         
     Returns:
-        Trained model and compute device
+        Trained model, compute device, and test dataframe
     """
     # Setup device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -39,29 +45,71 @@ def train_model(training_data_path, output_model_path):
     model = SkinToneClassifier(num_classes=10)
     model.to(device)
     
-    # Load training data
-    train_df = pd.read_csv(training_data_path)
-    print(f"Loaded training data with {len(train_df)} samples")
+    # Load data
+    full_df = pd.read_csv(training_data_path)
+    print(f"Loaded data with {len(full_df)} samples")
     
-    if 'image_path' not in train_df.columns or 'monk_skin_type' not in train_df.columns:
-        print("Error: Training data must have 'image_path' and 'monk_skin_type' columns")
-        return None, device
+    if 'image_name' not in full_df.columns or 'predicted_skin_type' not in full_df.columns:
+        print("Error: Data must have 'image_name' and 'predicted_skin_type' columns")
+        return None, device, None
+    
+    # First split: separate out test set (20% of data)
+    train_val_df, test_df = train_test_split(
+        full_df, 
+        test_size=0.2,
+        random_state=42,
+        stratify=full_df['predicted_skin_type']  # Ensure balanced classes
+    )
+    
+    # Second split: divide remaining data into train and validation (80/20 split of the 80% remaining)
+    train_df, val_df = train_test_split(
+        train_val_df,
+        test_size=0.2,
+        random_state=42,
+        stratify=train_val_df['predicted_skin_type']
+    )
+    
+    print(f"Split data into: {len(train_df)} training, {len(val_df)} validation, {len(test_df)} test samples")
+    
+    # Save the splits for reference
+    split_dir = os.path.join(os.path.dirname(training_data_path), 'splits')
+    os.makedirs(split_dir, exist_ok=True)
+    
+    train_df.to_csv(os.path.join(split_dir, 'train_split.csv'), index=False)
+    val_df.to_csv(os.path.join(split_dir, 'validation_split.csv'), index=False)
+    test_df.to_csv(os.path.join(split_dir, 'test_split.csv'), index=False)
     
     # Setup data transforms
     transform = get_transforms()
     
-    # Create dataset
+    # Create dataset class
     class SkinToneDataset(torch.utils.data.Dataset):
-        def __init__(self, dataframe, transform=None):
+        def __init__(self, dataframe, transform=None, image_folder=None):
             self.dataframe = dataframe
             self.transform = transform
+            self.image_folder = image_folder
         
         def __len__(self):
             return len(self.dataframe)
         
         def __getitem__(self, idx):
-            img_path = self.dataframe.iloc[idx]['image_path']
-            label = self.dataframe.iloc[idx]['monk_skin_type'] - 1  # 0-indexed
+            image_name = self.dataframe.iloc[idx]['image_name']
+            label = self.dataframe.iloc[idx]['predicted_skin_type'] - 1  # 0-indexed
+            
+            # Construct the full image path
+            if self.image_folder:
+                # Try different extensions
+                for ext in ['.jpg', '.png', '.jpeg']:
+                    img_path = os.path.join(self.image_folder, f"{image_name}{ext}")
+                    if os.path.exists(img_path):
+                        break
+            else:
+                # If no image folder provided, assume image_name already contains the path
+                img_path = image_name
+            
+            # Check if image exists
+            if not os.path.exists(img_path):
+                raise FileNotFoundError(f"Image not found: {img_path}")
             
             img = Image.open(img_path).convert('RGB')
             
@@ -70,27 +118,29 @@ def train_model(training_data_path, output_model_path):
             
             return img, label
     
-    # Split data into training and validation sets
-    train_data, val_data = train_test_split(train_df, test_size=0.2, random_state=42)
-    print(f"Training set: {len(train_data)} samples, Validation set: {len(val_data)} samples")
+    #Define image folder path
     
-    # Create dataloaders
-    train_dataset = SkinToneDataset(train_data, transform)
-    val_dataset = SkinToneDataset(val_data, transform)
-    
+    print(f"Using images from: {image_folder}")
+
+    # Create dataloaders with image folder parameter
+    train_dataset = SkinToneDataset(train_df, transform, image_folder=image_folder)
+    val_dataset = SkinToneDataset(val_df, transform, image_folder=image_folder)
+
+    batch_size = 32
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=32, shuffle=True, num_workers=4)
+        train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
     val_loader = torch.utils.data.DataLoader(
-        val_dataset, batch_size=32, shuffle=False, num_workers=4)
+        val_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
+
     
-    # Setup training
+    # Rest of the training function remains the same
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', factor=0.5, patience=5)
     
     # Prepare for training
-    num_epochs = 20
+    num_epochs = 25
     best_val_loss = float('inf')
     
     # Lists to track metrics
@@ -149,17 +199,20 @@ def train_model(training_data_path, output_model_path):
         
         # Update scheduler
         scheduler.step(val_loss)
+
+        os.makedirs(os.path.dirname(output_model_path), exist_ok=True)
+        torch.save(model.state_dict(), output_model_path)
         
         # Save best model
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             # Create the directory if it doesn't exist
-            os.makedirs(os.path.dirname(output_model_path), exist_ok=True)
-            torch.save(model.state_dict(), output_model_path)
-            print(f"Saved improved model to {output_model_path}")
+            os.makedirs(os.path.dirname(output_best_model_path), exist_ok=True)
+            torch.save(model.state_dict(), output_best_model_path)
+            print(f"Saved improved model to {output_best_model_path}")
     
     # Load best model for return
-    model.load_state_dict(torch.load(output_model_path))
+    model.load_state_dict(torch.load(output_best_model_path))
     print("Training complete! Loaded best model.")
     
     # Plot training curves
@@ -183,26 +236,43 @@ def train_model(training_data_path, output_model_path):
     plt.tight_layout()
     
     # Save the plot
-    plots_dir = os.path.join(os.path.dirname(output_model_path), 'plots')
+    plots_dir = os.path.join(os.path.dirname(output_best_model_path), 'plots')
     os.makedirs(plots_dir, exist_ok=True)
     plt.savefig(os.path.join(plots_dir, 'training_curves.png'), dpi=300)
     plt.close()
     
-    return model, device
+    return model, device, test_df
 
-def predict_with_model(model, device, image_path):
+def predict_with_model(model, device, image_name, image_folder=None):
     """
     Predict skin tone using the trained model.
     
     Args:
         model: Trained model
         device: Compute device (CPU/GPU)
-        image_path: Path to the image
+        image_name: Image name or path
+        image_folder: Folder containing the images (if image_name is just a filename)
         
     Returns:
         Predicted Monk skin type (1-10)
     """
     try:
+        # Construct the full image path if needed
+        if image_folder:
+            # Try different extensions
+            image_path = None
+            for ext in ['.jpg', '.png', '.jpeg']:
+                test_path = os.path.join(image_folder, f"{image_name}{ext}")
+                if os.path.exists(test_path):
+                    image_path = test_path
+                    break
+            
+            if image_path is None:
+                raise FileNotFoundError(f"Image not found: {image_name}")
+        else:
+            # If no image folder provided, assume image_name already contains the path
+            image_path = image_name
+        
         # Open image with PIL
         img = Image.open(image_path).convert('RGB')
         
@@ -219,98 +289,8 @@ def predict_with_model(model, device, image_path):
         return predicted.item() + 1  # +1 because model outputs 0-9
     
     except Exception as e:
-        print(f"Error predicting for {image_path}: {e}")
+        print(f"Error predicting for {image_name}: {e}")
         return None
-
-def visualize_training_results(training_data_path, model, device, output_folder):
-    """
-    Visualize the model's predictions on the training data.
-    
-    Args:
-        training_data_path: Path to the training data
-        model: Trained model
-        device: Compute device
-        output_folder: Folder to save visualizations
-    """
-    # Create output folder if it doesn't exist
-    os.makedirs(output_folder, exist_ok=True)
-    
-    # Load training data
-    train_df = pd.read_csv(training_data_path)
-    
-    # Create a confusion matrix
-    actual = []
-    predicted = []
-    
-    # Make predictions
-    print("Evaluating model on training data...")
-    for i, row in tqdm(train_df.iterrows(), total=len(train_df)):
-        image_path = row['image_path']
-        actual_type = row['monk_skin_type']
-        
-        # Predict
-        pred_type = predict_with_model(model, device, image_path)
-        
-        if pred_type is not None:
-            actual.append(actual_type)
-            predicted.append(pred_type)
-    
-    # Convert to numpy arrays
-    actual = np.array(actual)
-    predicted = np.array(predicted)
-    
-    # Calculate accuracy
-    accuracy = np.mean(actual == predicted)
-    print(f"Accuracy on training data: {accuracy:.4f}")
-    
-    # Create confusion matrix
-    confusion = np.zeros((10, 10), dtype=int)
-    for a, p in zip(actual, predicted):
-        confusion[a-1, p-1] += 1
-    
-    # Plot confusion matrix
-    plt.figure(figsize=(10, 8))
-    plt.imshow(confusion, cmap='Blues')
-    plt.colorbar()
-    
-    # Add labels
-    plt.xlabel('Predicted')
-    plt.ylabel('Actual')
-    plt.title('Confusion Matrix')
-    
-    # Add ticks
-    tick_labels = list(range(1, 11))
-    plt.xticks(np.arange(10), tick_labels)
-    plt.yticks(np.arange(10), tick_labels)
-    
-    # Add numbers
-    for i in range(10):
-        for j in range(10):
-            plt.text(j, i, confusion[i, j], ha='center', va='center', 
-                     color='white' if confusion[i, j] > np.max(confusion)/2 else 'black')
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_folder, 'confusion_matrix.png'), dpi=300)
-    plt.close()
-    
-    # Plot prediction distribution
-    plt.figure(figsize=(12, 6))
-    
-    plt.subplot(1, 2, 1)
-    pd.Series(actual).value_counts().sort_index().plot(kind='bar', color='skyblue')
-    plt.title('Actual Skin Type Distribution')
-    plt.xlabel('Monk Skin Type')
-    plt.ylabel('Count')
-    
-    plt.subplot(1, 2, 2)
-    pd.Series(predicted).value_counts().sort_index().plot(kind='bar', color='salmon')
-    plt.title('Predicted Skin Type Distribution')
-    plt.xlabel('Monk Skin Type')
-    plt.ylabel('Count')
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_folder, 'distribution_comparison.png'), dpi=300)
-    plt.close()
 
 def main():
     """Main function to run the script."""
@@ -319,23 +299,121 @@ def main():
     
     # Define paths
     data_dir = os.path.join(project_root, 'data')
-    training_data_path = os.path.join(data_dir, 'labeled_skin_types.csv')
+    image_folder = os.path.join(data_dir, 'train_224X224')
+    training_data_path = os.path.join(data_dir, 'skin_type_analysis', 'clustering_prediction', 'spectral', 'ISIC_2020_with_monk_skin_types.csv')
     model_folder = os.path.join(project_root, 'trained_model')
-    output_model_path = os.path.join(model_folder, 'monk_skin_tone_model.pth')
-    output_folder = os.path.join(data_dir, 'model_evaluation')
+    output_best_model_path = os.path.join(model_folder, 'best_monk_skin_tone_model.pth')
+    output_model_path = os.path.join(model_folder, 'last_monk_skin_tone_model.pth')
+    output_folder = os.path.join(project_root, 'model_evaluation', 'monk_skin_type')
     
     # Create directories if they don't exist
     os.makedirs(model_folder, exist_ok=True)
     os.makedirs(output_folder, exist_ok=True)
     
-    # Train the model
-    print(f"Training model using data from {training_data_path}")
-    model, device = train_model(training_data_path, output_model_path)
+    # Train the model and get the test set
+    print(f"Training MobileNetV2 model using data from {training_data_path}")
+    model, device, test_df = train_model(training_data_path, output_model_path, output_best_model_path, image_folder)
     
-    if model is not None:
-        # Visualize training results
-        visualize_training_results(training_data_path, model, device, output_folder)
-        print(f"Model training complete! Model saved to {output_model_path}")
+    if model is not None and test_df is not None:
+        # Evaluate on the test set
+        # Evaluate on the test set
+        print("Evaluating model on test set...")
+        image_folder = os.path.join(data_dir, 'train_224X224')
+        test_predictions = []
+        test_actual = []
+
+        for _, row in tqdm(test_df.iterrows(), total=len(test_df)):
+            image_name = row['image_name']
+            actual_type = row['predicted_skin_type']
+            
+            # Predict using the updated function with image folder
+            pred_type = predict_with_model(model, device, image_name, image_folder=image_folder)
+            
+            if pred_type is not None:
+                test_actual.append(actual_type)
+                test_predictions.append(pred_type)
+        
+        # Convert to numpy arrays
+        test_actual = np.array(test_actual)
+        test_predictions = np.array(test_predictions)
+        
+        # Calculate accuracy
+        test_accuracy = np.mean(test_actual == test_predictions)
+        print(f"Test Accuracy: {test_accuracy:.4f}")
+        
+        # Calculate precision, recall, and F1 score (both macro and weighted)
+        precision_macro = precision_score(test_actual, test_predictions, average='macro')
+        precision_weighted = precision_score(test_actual, test_predictions, average='weighted')
+        
+        recall_macro = recall_score(test_actual, test_predictions, average='macro')
+        recall_weighted = recall_score(test_actual, test_predictions, average='weighted')
+        
+        f1_macro = f1_score(test_actual, test_predictions, average='macro')
+        f1_weighted = f1_score(test_actual, test_predictions, average='weighted')
+        
+        # Print comprehensive metrics
+        print(f"Precision (macro): {precision_macro:.4f}")
+        print(f"Precision (weighted): {precision_weighted:.4f}")
+        print(f"Recall (macro): {recall_macro:.4f}")
+        print(f"Recall (weighted): {recall_weighted:.4f}")
+        print(f"F1 Score (macro): {f1_macro:.4f}")
+        print(f"F1 Score (weighted): {f1_weighted:.4f}")
+        
+        # Get detailed classification report
+        class_report = classification_report(test_actual, test_predictions)
+        print("\nDetailed Classification Report:")
+        print(class_report)
+        
+        # Save metrics to a text file
+        with open(os.path.join(output_folder, 'test_metrics.txt'), 'w') as f:
+            f.write(f"Test Accuracy: {test_accuracy:.4f}\n")
+            f.write(f"Precision (macro): {precision_macro:.4f}\n")
+            f.write(f"Precision (weighted): {precision_weighted:.4f}\n")
+            f.write(f"Recall (macro): {recall_macro:.4f}\n")
+            f.write(f"Recall (weighted): {recall_weighted:.4f}\n")
+            f.write(f"F1 Score (macro): {f1_macro:.4f}\n")
+            f.write(f"F1 Score (weighted): {f1_weighted:.4f}\n\n")
+            f.write("Detailed Classification Report:\n")
+            f.write(class_report)
+        
+        # Create test confusion matrix
+        cm = confusion_matrix(test_actual, test_predictions)
+        
+        # Plot test confusion matrix
+        plt.figure(figsize=(10, 8))
+        plt.imshow(cm, cmap='Blues')
+        plt.colorbar()
+        plt.xlabel('Predicted')
+        plt.ylabel('Actual')
+        plt.title('Test Set Confusion Matrix')
+        plt.xticks(np.arange(10), list(range(1, 11)))
+        plt.yticks(np.arange(10), list(range(1, 11)))
+        
+        # Add numbers to the confusion matrix
+        for i in range(cm.shape[0]):
+            for j in range(cm.shape[1]):
+                plt.text(j, i, cm[i, j], ha='center', va='center',
+                        color='white' if cm[i, j] > np.max(cm)/2 else 'black')
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_folder, 'test_confusion_matrix.png'), dpi=300)
+        plt.close()
+        
+        # Create a DataFrame with test predictions
+        test_results_df = test_df.copy()
+        test_results_df['model_prediction'] = None
+
+        # Add predictions to DataFrame
+        for i, (idx, row) in enumerate(test_df.iterrows()):
+            if i < len(test_predictions):
+                test_results_df.loc[idx, 'model_prediction'] = test_predictions[i]
+
+        # Save test predictions to CSV
+        test_results_path = os.path.join(output_folder, 'test_predictions.csv')
+        test_results_df.to_csv(test_results_path, index=False)
+        print(f"Test predictions saved to {test_results_path}")
+        
+        print(f"MobileNetV2 model training and evaluation complete! Model saved to {output_model_path}")
     else:
         print("Model training failed.")
 

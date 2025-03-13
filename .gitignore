@@ -35,6 +35,7 @@ MANIFEST
 #data
 /data/ISIC_2020_Training_JPEG/train/*.jpg
 /data/train_224X224/*.jpg
+/data/skin_type_analysis
 
 # Installer logs
 pip-log.txt
