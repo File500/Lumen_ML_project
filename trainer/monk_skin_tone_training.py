@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from model.skin_tone_model import SkinToneClassifier
+from model.skin_tone_model import SkinToneClassifier, EfficientNetSkinToneClassifier, ResNetSkinToneClassifier
 from sklearn.metrics import classification_report, precision_score, recall_score, f1_score, confusion_matrix
 
 # Define image transformations for training
@@ -42,7 +42,8 @@ def train_model(training_data_path, output_model_path, output_best_model_path, i
     print(f"Using {device} for training")
     
     # Create model architecture
-    model = SkinToneClassifier(num_classes=10)
+    #model = SkinToneClassifier(num_classes=10)
+    model = EfficientNetSkinToneClassifier(num_classes=10)
     model.to(device)
     
     # Load data
@@ -300,7 +301,7 @@ def main():
     # Define paths
     data_dir = os.path.join(project_root, 'data')
     image_folder = os.path.join(data_dir, 'train_224X224')
-    training_data_path = os.path.join(data_dir, 'skin_type_analysis', 'clustering_prediction', 'spectral', 'ISIC_2020_with_monk_skin_types.csv')
+    training_data_path = os.path.join(data_dir, 'skin_type_analysis', 'clustering_comparison', 'spectral', 'ISIC_2020_with_monk_skin_types.csv')
     model_folder = os.path.join(project_root, 'trained_model')
     output_best_model_path = os.path.join(model_folder, 'best_monk_skin_tone_model.pth')
     output_model_path = os.path.join(model_folder, 'last_monk_skin_tone_model.pth')
@@ -315,7 +316,7 @@ def main():
     model, device, test_df = train_model(training_data_path, output_model_path, output_best_model_path, image_folder)
     
     if model is not None and test_df is not None:
-        # Evaluate on the test set
+
         # Evaluate on the test set
         print("Evaluating model on test set...")
         image_folder = os.path.join(data_dir, 'train_224X224')

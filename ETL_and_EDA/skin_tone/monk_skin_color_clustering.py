@@ -5,8 +5,9 @@ import cv2
 from sklearn.cluster import KMeans
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from sklearn.cluster import DBSCAN, SpectralClustering
+from sklearn.cluster import DBSCAN, SpectralClustering, AgglomerativeClustering
 from sklearn.mixture import GaussianMixture
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 def crop_black_lines(img):
     """
@@ -53,9 +54,8 @@ def crop_black_lines(img):
 
 def extract_skin_features_advanced(image_path):
     """
-    Extract features related to skin tone from the image.
-    Uses both cropping and masking to focus only on the surrounding skin,
-    excluding the lesion.
+    Extract features related to skin tone with corrected masking.
+    Properly excludes lesions and keeps normal skin.
     
     Args:
         image_path: Path to the dermoscopic image
@@ -73,93 +73,81 @@ def extract_skin_features_advanced(image_path):
         # Crop black lines from top and bottom
         img = crop_black_lines(img)
         
-        # Convert to different color spaces for processing
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-        
-        # Create a combined mask to exclude:
-        # 1. Very dark areas (likely not skin)
-        # 2. The lesion itself
-        
-        # First, create basic brightness mask
-        brightness_mask = gray > 30  # Exclude very dark pixels
-        
-        # Now create a lesion mask using multiple techniques
-        
-        # Method 1: Use saturation to identify lesions (often more saturated than skin)
-        sat_channel = hsv[:,:,1]
-        _, sat_mask = cv2.threshold(sat_channel, 180, 255, cv2.THRESH_BINARY)
-        sat_mask = sat_mask > 0
-        
-        # Method 2: Use color deviation from mean skin tone
-        # Compute mean color of the image (likely to be skin color)
-        mean_color = np.mean(img, axis=(0, 1))
-        
-        # Create a color distance image
-        color_dist = np.zeros_like(gray, dtype=np.float32)
-        for i in range(3):  # For each BGR channel
-            diff = img[:,:,i].astype(np.float32) - mean_color[i]
-            color_dist += diff * diff
-        color_dist = np.sqrt(color_dist)
-        
-        # Threshold to find areas with significant color deviation
-        _, color_mask = cv2.threshold(color_dist, 100, 255, cv2.THRESH_BINARY)
-        color_mask = color_mask > 0
-        
-        # Method 3: Focus on the border region of the image
-        # Create a border mask (25% border around the image)
-        h, w = img.shape[:2]
-        border_width = int(min(h, w) * 0.25)
-        border_mask = np.ones_like(gray, dtype=bool)
-        
-        # Remove the center part
-        center_h_start = max(0, int(h/2 - border_width/2))
-        center_h_end = min(h, int(h/2 + border_width/2))
-        center_w_start = max(0, int(w/2 - border_width/2))
-        center_w_end = min(w, int(w/2 + border_width/2))
-        
-        border_mask[center_h_start:center_h_end, center_w_start:center_w_end] = False
-        
-        # Combine masks:
-        # 1. Keep bright areas (not dark)
-        # 2. Exclude saturated areas (likely lesion)
-        # 3. Exclude areas with different color (likely lesion)
-        # 4. Focus on border regions more likely to be normal skin
-        
-        # Start with brightness mask
-        combined_mask = brightness_mask.copy()
-        
-        # Exclude saturated areas and color-different areas
-        combined_mask = combined_mask & ~sat_mask & ~color_mask
-        
-        # Enhance weight of border regions
-        combined_mask = combined_mask | (border_mask & brightness_mask)
-        
-        # Check if the mask is too restrictive
-        if np.sum(combined_mask) < (np.prod(img.shape[:2]) * 0.05):  
-            # If less than 5% of pixels remain, fall back to just brightness mask
-            combined_mask = brightness_mask
-            print(f"Warning: Mask too restrictive for {image_path}, using only brightness mask")
-        
-        # Convert to LAB color space
+        # Convert to color spaces
         lab_img = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-        
-        # Extract L, A, B channels
         l_channel, a_channel, b_channel = cv2.split(lab_img)
         
-        # Apply mask to color channels
-        l_masked = l_channel[combined_mask]
-        a_masked = a_channel[combined_mask]
-        b_masked = b_channel[combined_mask]
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        h_channel, s_channel, v_channel = cv2.split(hsv)
         
-        # Handle case where mask is too restrictive
-        if len(l_masked) < 100:  # Ensure we have enough pixels
-            print(f"Warning: Not enough pixels after masking for {image_path}")
-            l_masked = l_channel.flatten()
-            a_masked = a_channel.flatten()
-            b_masked = b_channel.flatten()
+        # IMPORTANT: For all masks below, True (1) means we KEEP that pixel,
+        # False (0) means we EXCLUDE that pixel
         
-        # Use KMeans to find dominant colors (5 clusters) from masked pixels
+        # Approach: Lesions are typically darker, more red, and more saturated than surrounding skin
+        
+        # 1. Lightness mask (L channel)
+        # KEEP pixels that are LIGHTER (higher L values)
+        l_mean = np.mean(l_channel)
+        l_std = np.std(l_channel)
+        l_mask = l_channel > l_mean - 0.5 * l_std  # KEEP pixels that are lighter
+        
+        # 2. Redness mask (A channel)
+        # KEEP pixels that are LESS RED (lower A values)
+        a_mean = np.mean(a_channel)
+        a_std = np.std(a_channel)
+        a_mask = a_channel < a_mean + 0.5 * a_std  # KEEP pixels that are less red
+        
+        # 3. Saturation mask (S channel)
+        # KEEP pixels that are LESS SATURATED (lower S values)
+        s_mean = np.mean(s_channel)
+        s_std = np.std(s_channel)
+        s_mask = s_channel < s_mean + 0.5 * s_std  # KEEP pixels that are less saturated
+        
+        # 4. Border mask - assume the edges are more likely to be normal skin
+        h, w = img.shape[:2]
+        border_width = int(min(h, w) * 0.2)  # 20% border width
+        
+        # Create a border mask where True = border region (to keep)
+        border_mask = np.zeros((h, w), dtype=bool)
+        
+        # Top, bottom, left, right borders
+        border_mask[:border_width, :] = True  # Top border
+        border_mask[-border_width:, :] = True  # Bottom border
+        border_mask[:, :border_width] = True  # Left border
+        border_mask[:, -border_width:] = True  # Right border
+        
+        # Combine the masks
+        # 1. First approach: Keep pixels that are likely normal skin based on color features
+        color_mask = l_mask & a_mask & s_mask  # Pixels that are light AND less red AND less saturated
+        
+        # 2. Second approach: Keep border regions
+        # We will combine these approaches with OR because we want to keep EITHER
+        # pixels that look like normal skin OR pixels that are in the border
+        final_mask = color_mask | border_mask
+        
+        # Apply the mask to extract features from normal skin areas
+        l_masked = l_channel[final_mask]
+        a_masked = a_channel[final_mask]
+        b_masked = b_channel[final_mask]
+        
+        # Check if we have enough pixels
+        if len(l_masked) < (l_channel.size * 0.1):  # Less than 10% of the image
+            # If mask is too restrictive, fall back to just the L mask (lightness)
+            # which is usually the most reliable for distinguishing skin from lesion
+            l_masked = l_channel[l_mask]
+            a_masked = a_channel[l_mask]
+            b_masked = b_channel[l_mask]
+            
+            print(f"Warning: Final mask too restrictive for {image_path}, using L mask")
+            
+            # If still too few pixels, use the entire image
+            if len(l_masked) < 100:
+                l_masked = l_channel.flatten()
+                a_masked = a_channel.flatten()
+                b_masked = b_channel.flatten()
+                print(f"Warning: All masks too restrictive for {image_path}, using full image")
+        
+        # Use KMeans to find dominant colors
         pixels = np.column_stack((l_masked, a_masked, b_masked))
         
         # Handle case where there are fewer pixels than clusters
@@ -206,8 +194,7 @@ def extract_skin_features_advanced(image_path):
     
 def save_masked_image_for_debug(image_path, output_folder, method_name=None, max_samples=10):
     """
-    Save visualizations of the masked image to see what areas are being used
-    for skin tone analysis. Useful for debugging the lesion exclusion.
+    Save visualizations of the corrected masking approach.
     
     Args:
         image_path: Path to the original image
@@ -244,80 +231,117 @@ def save_masked_image_for_debug(image_path, output_folder, method_name=None, max
         # Crop black lines
         img = crop_black_lines(img)
         
-        # Convert to different color spaces
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        # Convert to color spaces
+        lab_img = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        l_channel, a_channel, b_channel = cv2.split(lab_img)
+        
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        h_channel, s_channel, v_channel = cv2.split(hsv)
         
-        # Create masks
-        brightness_mask = gray > 30
+        # Create masks (True = keep, False = exclude)
         
-        sat_channel = hsv[:,:,1]
-        _, sat_mask = cv2.threshold(sat_channel, 180, 255, cv2.THRESH_BINARY)
-        sat_mask = sat_mask > 0
+        # 1. Lightness mask (L channel)
+        l_mean = np.mean(l_channel)
+        l_std = np.std(l_channel)
+        l_mask = l_channel > l_mean - 0.5 * l_std  # Lighter pixels
         
-        mean_color = np.mean(img, axis=(0, 1))
-        color_dist = np.zeros_like(gray, dtype=np.float32)
-        for i in range(3):
-            diff = img[:,:,i].astype(np.float32) - mean_color[i]
-            color_dist += diff * diff
-        color_dist = np.sqrt(color_dist)
+        # 2. Redness mask (A channel)
+        a_mean = np.mean(a_channel)
+        a_std = np.std(a_channel)
+        a_mask = a_channel < a_mean + 0.5 * a_std  # Less red pixels
         
-        _, color_mask = cv2.threshold(color_dist, 100, 255, cv2.THRESH_BINARY)
-        color_mask = color_mask > 0
+        # 3. Saturation mask (S channel)
+        s_mean = np.mean(s_channel)
+        s_std = np.std(s_channel)
+        s_mask = s_channel < s_mean + 0.5 * s_std  # Less saturated pixels
         
+        # 4. Border mask
         h, w = img.shape[:2]
-        border_width = int(min(h, w) * 0.25)
-        border_mask = np.ones_like(gray, dtype=bool)
-        center_h_start = max(0, int(h/2 - border_width/2))
-        center_h_end = min(h, int(h/2 + border_width/2))
-        center_w_start = max(0, int(w/2 - border_width/2))
-        center_w_end = min(w, int(w/2 + border_width/2))
-        border_mask[center_h_start:center_h_end, center_w_start:center_w_end] = False
+        border_width = int(min(h, w) * 0.2)
+        border_mask = np.zeros((h, w), dtype=bool)
+        border_mask[:border_width, :] = True  # Top border
+        border_mask[-border_width:, :] = True  # Bottom border
+        border_mask[:, :border_width] = True  # Left border
+        border_mask[:, -border_width:] = True  # Right border
         
-        # Combined mask
-        combined_mask = brightness_mask.copy()
-        combined_mask = combined_mask & ~sat_mask & ~color_mask
-        combined_mask = combined_mask | (border_mask & brightness_mask)
+        # Combine masks
+        color_mask = l_mask & a_mask & s_mask
+        final_mask = color_mask | border_mask
         
-        # Create visualization images
-        brightness_viz = img.copy()
-        brightness_viz[~brightness_mask] = [0, 0, 0]
+        # Create visualizations
+        # Original image
+        original = img.copy()
         
-        sat_viz = img.copy()
-        sat_viz[sat_mask] = [0, 0, 255]  # Red overlay for saturated areas
+        # For LAB and HSV channels, normalize for better visibility
+        l_viz = cv2.normalize(l_channel, None, 0, 255, cv2.NORM_MINMAX)
+        a_viz = cv2.normalize(a_channel, None, 0, 255, cv2.NORM_MINMAX)
+        b_viz = cv2.normalize(b_channel, None, 0, 255, cv2.NORM_MINMAX)
         
-        color_viz = img.copy()
-        color_viz[color_mask] = [255, 0, 0]  # Blue overlay for color-different areas
+        s_viz = cv2.normalize(s_channel, None, 0, 255, cv2.NORM_MINMAX)
         
-        border_viz = img.copy()
-        border_viz[~border_mask] = [0, 0, 0]
+        # Convert to 3-channel for display
+        l_viz_color = cv2.cvtColor(l_viz, cv2.COLOR_GRAY2BGR)
+        a_viz_color = cv2.cvtColor(a_viz, cv2.COLOR_GRAY2BGR)
+        s_viz_color = cv2.cvtColor(s_viz, cv2.COLOR_GRAY2BGR)
         
-        combined_viz = img.copy()
-        combined_viz[~combined_mask] = [0, 0, 0]
+        # Visualize what's kept (original color) vs excluded (black)
+        l_kept = img.copy()
+        l_kept[~l_mask] = [0, 0, 0]  # Black out excluded regions
+        
+        a_kept = img.copy()
+        a_kept[~a_mask] = [0, 0, 0]
+        
+        s_kept = img.copy()
+        s_kept[~s_mask] = [0, 0, 0]
+        
+        border_kept = img.copy()
+        border_kept[~border_mask] = [0, 0, 0]
+        
+        color_kept = img.copy()
+        color_kept[~color_mask] = [0, 0, 0]
+        
+        final_kept = img.copy()
+        final_kept[~final_mask] = [0, 0, 0]
+        
+        # Visualize what's excluded (original color) vs kept (black)
+        # This helps see if lesions are properly excluded
+        l_excluded = img.copy()
+        l_excluded[l_mask] = [0, 0, 0]  # Black out kept regions
+        
+        a_excluded = img.copy()
+        a_excluded[a_mask] = [0, 0, 0]
+        
+        s_excluded = img.copy()
+        s_excluded[s_mask] = [0, 0, 0]
+        
+        color_excluded = img.copy()
+        color_excluded[color_mask] = [0, 0, 0]
+        
+        final_excluded = img.copy()
+        final_excluded[final_mask] = [0, 0, 0]
         
         # Extract image name for the output filename
         img_name = os.path.splitext(os.path.basename(image_path))[0]
         
         # Save visualizations
-        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_original.jpg"), img)
-        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_1_brightness.jpg"), brightness_viz)
-        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_2_saturation.jpg"), sat_viz)
-        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_3_color.jpg"), color_viz)
-        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_4_border.jpg"), border_viz)
-        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_5_combined.jpg"), combined_viz)
+        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_01_original.jpg"), original)
         
-        # Also save the LAB color space visualization
-        lab_img = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-        l_channel, a_channel, b_channel = cv2.split(lab_img)
+        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_02_L_channel.jpg"), l_viz_color)
+        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_03_A_channel.jpg"), a_viz_color)
+        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_04_S_channel.jpg"), s_viz_color)
         
-        # Normalize LAB channels for visualization
-        l_norm = cv2.normalize(l_channel, None, 0, 255, cv2.NORM_MINMAX)
-        a_norm = cv2.normalize(a_channel, None, 0, 255, cv2.NORM_MINMAX)
-        b_norm = cv2.normalize(b_channel, None, 0, 255, cv2.NORM_MINMAX)
+        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_05_L_kept.jpg"), l_kept)
+        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_06_A_kept.jpg"), a_kept)
+        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_07_S_kept.jpg"), s_kept)
+        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_08_border_kept.jpg"), border_kept)
+        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_09_color_kept.jpg"), color_kept)
+        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_10_final_kept.jpg"), final_kept)
         
-        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_6_L_channel.jpg"), l_norm)
-        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_7_A_channel.jpg"), a_norm)
-        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_8_B_channel.jpg"), b_norm)
+        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_11_L_excluded.jpg"), l_excluded)
+        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_12_A_excluded.jpg"), a_excluded)
+        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_13_S_excluded.jpg"), s_excluded)
+        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_14_color_excluded.jpg"), color_excluded)
+        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_15_final_excluded.jpg"), final_excluded)
         
         # Increment counter for this method
         save_masked_image_for_debug.counters[method_name] += 1
@@ -390,7 +414,7 @@ def classify_with_kmeans(features_df, output_folder):
 
 def classify_with_gmm(features_df, output_folder):
     """
-    Classify skin types using Gaussian Mixture Model clustering.
+    Classify skin types using Gaussian Mixture Model clustering with improved differentiation.
     
     Args:
         features_df: DataFrame with extracted skin features
@@ -405,26 +429,84 @@ def classify_with_gmm(features_df, output_folder):
     # Create feature matrix
     X = features_df[feature_cols].copy()
     
+    # Different preprocessing for GMM to differentiate from K-means
+    # Apply non-linear transformation to enhance subtle differences
+    gmm_X = X.copy()
+    
+    # Emphasize differences in a and b channels (color information)
+    for col in feature_cols:
+        if 'avg_a' in col or 'dom' in col and 'a' in col:
+            # Apply non-linear transformation to a channel
+            gmm_X[col] = np.sign(gmm_X[col]) * np.abs(gmm_X[col])**0.8
+        if 'avg_b' in col or 'dom' in col and 'b' in col:
+            # Apply non-linear transformation to b channel
+            gmm_X[col] = np.sign(gmm_X[col]) * np.abs(gmm_X[col])**0.8
+    
     # Normalize features
-    X = (X - X.mean()) / X.std()
+    gmm_X = (gmm_X - gmm_X.mean()) / gmm_X.std()
     
-    # Use GMM to cluster the data into 10 clusters
-    print("Running GMM clustering...")
-    gmm = GaussianMixture(n_components=10, random_state=42, covariance_type='full', n_init=3)
-    gmm.fit(X)
+    # Try different GMM configurations
+    print("Testing GMM configurations...")
+    best_aic = float('inf')
+    best_gmm = None
+    best_config = None
     
-    # Get cluster assignments
-    clusters = gmm.predict(X)
+    for cov_type in ['full', 'tied', 'diag']:
+        for n_components in [10, 12, 15]:
+            for reg_covar in [1e-4, 1e-3, 1e-2]:
+                gmm = GaussianMixture(
+                    n_components=n_components,
+                    random_state=42,
+                    covariance_type=cov_type,
+                    reg_covar=reg_covar,
+                    n_init=5,
+                    init_params='kmeans'  # Initialize using K-means but then diverge
+                )
+                
+                try:
+                    gmm.fit(gmm_X)
+                    aic = gmm.aic(gmm_X)
+                    
+                    # Check cluster sizes
+                    clusters = gmm.predict(gmm_X)
+                    counts = np.bincount(clusters, minlength=n_components)
+                    
+                    # Calculate coefficient of variation (lower = more balanced)
+                    cv = np.std(counts) / np.mean(counts)
+                    
+                    config = f"n={n_components}, cov={cov_type}, reg={reg_covar}"
+                    print(f"  {config}: AIC={aic:.1f}, CV={cv:.3f}")
+                    
+                    # We want a balance between good fit (low AIC) and balance (low CV)
+                    # Use a combined score
+                    score = aic + cv * 1000  # Scale CV to be comparable with AIC
+                    
+                    if score < best_aic:
+                        best_aic = score
+                        best_gmm = gmm
+                        best_config = config
+                except Exception as e:
+                    print(f"  Error with {cov_type}, n={n_components}, reg={reg_covar}: {e}")
     
-    # Get cluster centers (means of each Gaussian component)
-    cluster_centers = gmm.means_
+    if best_gmm is None:
+        print("All GMM configurations failed. Falling back to K-means.")
+        kmeans = KMeans(n_clusters=10, random_state=42, n_init=10)
+        kmeans.fit(gmm_X)
+        clusters = kmeans.predict(gmm_X)
+        cluster_centers = kmeans.cluster_centers_
+    else:
+        print(f"Selected GMM configuration: {best_config}")
+        clusters = best_gmm.predict(gmm_X)
+        
+        # Get the means of the Gaussian components
+        cluster_centers = best_gmm.means_
     
     # Find average L value (lightness) for each cluster
     l_index = feature_cols.index('avg_l')
     a_index = feature_cols.index('avg_a')
     b_index = feature_cols.index('avg_b')
     
-    # Calculate a combined skin tone score using L, a, b values
+    # Now use a different score for mapping to skin types
     skin_tone_scores = []
     for center in cluster_centers:
         # Invert L value so higher value = darker skin
@@ -432,21 +514,40 @@ def classify_with_gmm(features_df, output_folder):
         a_value = center[a_index]         # a can be negative (green) or positive (red)
         b_value = center[b_index]         # b can be negative (blue) or positive (yellow)
         
-        # Simple weighted score
-        score = (0.55 * l_value) + (0.25 * a_value) + (0.20 * b_value)
+        # Use a different formula from K-means to get different results
+        # Give higher weight to undertones (a and b values)
+        score = (0.5 * l_value) + (0.3 * a_value) + (0.2 * b_value)
         skin_tone_scores.append(score)
     
     # Sort clusters by skin tone score (lower to higher = lighter to darker)
     sorted_indices = np.argsort(skin_tone_scores)
     
     # Map original clusters to Monk skin types (1-10)
+    # If we have more than 10 components, we need to map them to 10 types
     cluster_to_skin_type = {}
-    for skin_type, cluster in enumerate(sorted_indices, 1):
-        cluster_to_skin_type[cluster] = skin_type
+    
+    if len(cluster_centers) <= 10:
+        # Direct mapping for 10 or fewer clusters
+        for skin_type, cluster in enumerate(sorted_indices, 1):
+            cluster_to_skin_type[cluster] = skin_type
+    else:
+        # For more than 10 clusters, map them to 10 skin types
+        # Create equally spaced bins
+        n_clusters = len(cluster_centers)
+        step = n_clusters / 10
+        
+        for i, cluster in enumerate(sorted_indices):
+            skin_type = min(10, max(1, int(1 + i / step)))
+            cluster_to_skin_type[cluster] = skin_type
     
     # Apply mapping to get predicted skin types
     results_df = features_df.copy()
     results_df['predicted_skin_type'] = [cluster_to_skin_type[c] for c in clusters]
+    
+    # Print distribution
+    distribution = results_df['predicted_skin_type'].value_counts().sort_index()
+    print("Final GMM distribution:")
+    print(distribution)
     
     return results_df
 
@@ -468,12 +569,31 @@ def classify_with_spectral(features_df, output_folder):
     X = features_df[feature_cols].copy()
     
     # Normalize features
-    X = (X - X.mean()) / X.std()
+    #X = (X - X.mean()) / X.std()
+    scaler = StandardScaler()
+    X = pd.DataFrame(scaler.fit_transform(X), columns=X.columns)
+
+    l_index = feature_cols.index('avg_l')
+    
+    # Apply a non-linear transformation to L values to compress extremes and emphasize midrange
+    # This transformation is applied to the already scaled data
+    X_transformed = X.copy()
+    X_transformed.iloc[:, l_index] = np.tanh(X.iloc[:, l_index] * 0.5)  # Compress extremes, preserve middle
+
+    
     
     # Use Spectral Clustering
     print("Running Spectral Clustering...")
-    spectral = SpectralClustering(n_clusters=10, random_state=42, affinity='nearest_neighbors')
-    clusters = spectral.fit_predict(X)
+    spectral = SpectralClustering(
+        n_clusters=10,
+        random_state=42,
+        affinity='rbf',  
+        gamma=0.1,  # Adjust gamma for more natural clustering
+        n_neighbors=20,
+        assign_labels='discretize',
+        n_init=50
+    )
+    clusters = spectral.fit_predict(X_transformed)
     
     # For Spectral Clustering, we need to compute cluster centers manually
     cluster_centers = []
@@ -506,7 +626,7 @@ def classify_with_spectral(features_df, output_folder):
         b_value = center[b_index]         # b can be negative (blue) or positive (yellow)
         
         # Simple weighted score
-        score = (0.55 * l_value) + (0.25 * a_value) + (0.20 * b_value)
+        score = (0.6 * l_value) + (0.2 * a_value) + (0.2 * b_value)
         skin_tone_scores.append(score)
     
     # Sort clusters by skin tone score (lower to higher = lighter to darker)
@@ -525,7 +645,7 @@ def classify_with_spectral(features_df, output_folder):
 
 def classify_with_dbscan(features_df, output_folder):
     """
-    Classify skin types using DBSCAN clustering.
+    Classify skin types using DBSCAN clustering with improved parameters.
     
     Args:
         features_df: DataFrame with extracted skin features
@@ -541,77 +661,65 @@ def classify_with_dbscan(features_df, output_folder):
     X = features_df[feature_cols].copy()
     
     # Normalize features
-    X_norm = (X - X.mean()) / X.std()
+    scaler = MinMaxScaler()
+    X_norm = pd.DataFrame(scaler.fit_transform(X), columns=X.columns)
     
-    # Use DBSCAN clustering
-    print("Running DBSCAN clustering...")
-    # DBSCAN parameters need tuning for your specific dataset
-    dbscan = DBSCAN(eps=0.5, min_samples=5)
-    clusters = dbscan.fit_predict(X_norm)
+    # Try different DBSCAN parameters until we get a reasonable number of clusters
+    # Start with a higher eps value and adjust if needed
+    eps_values = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+    min_samples_values = [2, 3, 4, 5]
     
-    # Handle noise points (label -1)
-    unique_clusters = np.unique(clusters)
-    n_clusters = len(unique_clusters)
+    best_n_clusters = 0
+    best_clusters = None
     
-    # If we have noise points or fewer than 10 clusters, we need to adjust
-    if -1 in unique_clusters or n_clusters < 10:
-        print(f"DBSCAN found {n_clusters} clusters including noise. Adjusting...")
-        
-        # Find the optimal number of clusters using KMeans on DBSCAN clusters
-        # First, identify non-noise points
-        if -1 in unique_clusters:
-            non_noise_mask = clusters != -1
-            non_noise_X = X_norm.iloc[non_noise_mask]
-            non_noise_indices = np.where(non_noise_mask)[0]
+    print("Tuning DBSCAN parameters...")
+    for eps in eps_values:
+        for min_samples in min_samples_values:
+            # Try DBSCAN with these parameters
+            dbscan = DBSCAN(eps=eps, min_samples=min_samples)
+            clusters = dbscan.fit_predict(X_norm)
             
-            # Determine how many more clusters we need
-            remaining_clusters = 10 - (n_clusters - 1)  # Subtract 1 for noise cluster
+            # Count unique clusters (excluding noise points)
+            unique_clusters = np.unique(clusters)
+            n_clusters = len([c for c in unique_clusters if c != -1])
             
-            if remaining_clusters > 0 and len(non_noise_X) > 0:
-                # Use KMeans to find more clusters in the non-noise data
-                kmeans = KMeans(n_clusters=min(remaining_clusters, len(non_noise_X)), 
-                               random_state=42, n_init=10)
-                sub_clusters = kmeans.fit_predict(non_noise_X)
+            print(f"  eps={eps}, min_samples={min_samples}: {n_clusters} clusters")
+            
+            # If this is better than our current best, update it
+            if n_clusters > best_n_clusters and n_clusters <= 10:
+                best_n_clusters = n_clusters
+                best_clusters = clusters.copy()
                 
-                # Assign new cluster IDs (starting from max existing cluster + 1)
-                max_cluster = max(clusters[clusters != -1]) if any(clusters != -1) else 0
-                for i, idx in enumerate(non_noise_indices):
-                    clusters[idx] = max_cluster + 1 + sub_clusters[i]
+            # If we found a good number of clusters, we can stop
+            if 8 <= n_clusters <= 10:
+                break
         
-        # If we still don't have enough clusters, use KMeans for the whole dataset
-        if len(np.unique(clusters)) < 10:
-            print("DBSCAN produced too few clusters, falling back to KMeans")
-            kmeans = KMeans(n_clusters=10, random_state=42, n_init=10)
-            clusters = kmeans.fit_predict(X_norm)
-            cluster_centers = kmeans.cluster_centers_
-        else:
-            # Compute cluster centers for DBSCAN manually
-            cluster_centers = []
-            for i in np.unique(clusters):
-                if i == -1:  # Skip noise points for center calculation
-                    continue
-                    
-                indices = np.where(clusters == i)[0]
-                center = X.iloc[indices].mean().values
-                cluster_centers.append(center)
-            
-            # If we have fewer than 10 centers, pad with zeros
-            while len(cluster_centers) < 10:
-                center = np.zeros(len(feature_cols))
-                cluster_centers.append(center)
-                
-            cluster_centers = np.array(cluster_centers)
+        # If we found a good number of clusters, we can stop
+        if 8 <= best_n_clusters <= 10:
+            break
+    
+    # If we couldn't find a good number of clusters, use KMeans instead
+    if best_n_clusters < 5:
+        print(f"DBSCAN found only {best_n_clusters} clusters. Falling back to KMeans.")
+        kmeans = KMeans(n_clusters=10, random_state=42, n_init=10)
+        clusters = kmeans.fit_predict(X_norm)
+        cluster_centers = kmeans.cluster_centers_
     else:
-        # Compute cluster centers for each non-noise cluster
+        print(f"DBSCAN found {best_n_clusters} clusters.")
+        clusters = best_clusters
+        
+        # Compute cluster centers manually
         cluster_centers = []
-        for i in range(10):  # Assuming clusters are labeled 0-9
+        valid_clusters = sorted([c for c in np.unique(clusters) if c != -1])
+        
+        for i in valid_clusters:
             indices = np.where(clusters == i)[0]
+            center = X.iloc[indices].mean().values
+            cluster_centers.append(center)
             
-            if len(indices) == 0:
-                center = np.zeros(len(feature_cols))
-            else:
-                center = X.iloc[indices].mean().values
-                
+        # If we don't have 10 clusters, add dummy centers for the missing ones
+        while len(cluster_centers) < 10:
+            center = np.zeros(len(feature_cols))
             cluster_centers.append(center)
             
         cluster_centers = np.array(cluster_centers)
@@ -638,38 +746,200 @@ def classify_with_dbscan(features_df, output_folder):
     
     # Map original clusters to Monk skin types (1-10)
     cluster_to_skin_type = {}
-    valid_clusters = [c for c in np.unique(clusters) if c != -1]
+    
+    # Handle noise points first - assign a reasonable skin type (middle of range)
+    if -1 in np.unique(clusters):
+        cluster_to_skin_type[-1] = 5
     
     # Map existing clusters to skin types
+    valid_clusters = sorted([c for c in np.unique(clusters) if c != -1])
     for skin_type, i in enumerate(sorted_indices[:len(valid_clusters)], 1):
         if i < len(valid_clusters):
-            cluster_id = valid_clusters[i]
+            cluster_id = valid_clusters[i % len(valid_clusters)]
             cluster_to_skin_type[cluster_id] = skin_type
     
     # Handle any unmapped clusters
     for c in valid_clusters:
         if c not in cluster_to_skin_type:
-            # Assign to closest skin type based on center
-            if len(cluster_centers) > c:
-                center = cluster_centers[c]
-                l_value = 100 - center[l_index]
-                score = (0.55 * l_value) + (0.25 * center[a_index]) + (0.20 * center[b_index])
-                
-                # Find closest skin type score
-                closest_skin_type = min(range(1, 11), 
-                                       key=lambda st: abs(skin_tone_scores[sorted_indices[st-1]] - score))
-                cluster_to_skin_type[c] = closest_skin_type
-            else:
-                # Fallback
-                cluster_to_skin_type[c] = 1
-    
-    # Handle noise points (-1) - assign them to skin type 1 (lightest)
-    if -1 in np.unique(clusters):
-        cluster_to_skin_type[-1] = 1
+            # Assign based on cluster index
+            cluster_to_skin_type[c] = (c % 10) + 1
     
     # Apply mapping to get predicted skin types
     results_df = features_df.copy()
-    results_df['predicted_skin_type'] = [cluster_to_skin_type.get(c, 1) for c in clusters]
+    results_df['predicted_skin_type'] = [cluster_to_skin_type.get(c, ((c+1) % 10) + 1) for c in clusters]
+    
+    return results_df
+
+def classify_with_agglomerative(features_df, output_folder):
+    """
+    Classify skin types using Agglomerative Clustering with improved balance.
+    
+    Args:
+        features_df: DataFrame with extracted skin features
+        output_folder: Folder to save results
+        
+    Returns:
+        DataFrame with added skin type predictions
+    """
+    # Import the necessary classes
+    from sklearn.cluster import AgglomerativeClustering
+    from sklearn.preprocessing import StandardScaler, MinMaxScaler
+    
+    # Features to use for clustering
+    feature_cols = [col for col in features_df.columns if col.startswith(('avg_', 'std_', 'dom'))]
+    
+    # Create feature matrix
+    X = features_df[feature_cols].copy()
+    
+    # Try different scaling approaches to get more balanced results
+    # 1. Standard scaling
+    X_std = StandardScaler().fit_transform(X)
+    # 2. Min-max scaling
+    X_minmax = MinMaxScaler().fit_transform(X)
+    
+    # Helper function to evaluate distribution balance
+    def evaluate_distribution(clusters):
+        counts = np.bincount(clusters, minlength=10)
+        # Calculate coefficient of variation (lower is more balanced)
+        cv = np.std(counts) / np.mean(counts)
+        return cv, counts
+    
+    # Try different linkage and scaling combinations
+    best_cv = float('inf')
+    best_clusters = None
+    best_combo = None
+    
+    print("Trying different Agglomerative Clustering configurations...")
+    for linkage in ['ward', 'complete', 'average']:
+        for distance_threshold in [None, 1.5, 2.0]:
+            for X_scaled, scale_name in [(X_std, 'std'), (X_minmax, 'minmax')]:
+                # If using distance_threshold, don't specify n_clusters
+                if distance_threshold:
+                    agg = AgglomerativeClustering(
+                        distance_threshold=distance_threshold,
+                        n_clusters=None,
+                        linkage=linkage
+                    )
+                else:
+                    agg = AgglomerativeClustering(
+                        n_clusters=10,
+                        linkage=linkage
+                    )
+                
+                clusters = agg.fit_predict(X_scaled)
+                
+                # If we used distance_threshold and got too few or too many clusters, skip
+                if len(np.unique(clusters)) < 5 or len(np.unique(clusters)) > 15:
+                    continue
+                
+                # If we don't have exactly 10 clusters, we'll need different handling later
+                n_clusters = len(np.unique(clusters))
+                
+                cv, counts = evaluate_distribution(clusters)
+                combo = f"{linkage}_{scale_name}"
+                if distance_threshold:
+                    combo += f"_dist{distance_threshold}"
+                
+                print(f"  {combo}: {n_clusters} clusters, CV={cv:.3f}, counts={counts}")
+                
+                # If this is more balanced and has reasonable number of clusters, keep it
+                if cv < best_cv and 8 <= n_clusters <= 12:
+                    best_cv = cv
+                    best_clusters = clusters.copy()
+                    best_combo = combo
+    
+    if best_clusters is None:
+        print("Could not find a balanced clustering. Falling back to KMeans.")
+        kmeans = KMeans(n_clusters=10, random_state=42, n_init=10)
+        best_clusters = kmeans.fit_predict(X_std)
+    else:
+        print(f"Selected {best_combo} with CV={best_cv:.3f}")
+    
+    # Get unique clusters
+    unique_clusters = np.unique(best_clusters)
+    n_clusters = len(unique_clusters)
+    
+    # If we don't have exactly 10 clusters, we might need special handling
+    if n_clusters != 10:
+        print(f"Found {n_clusters} clusters instead of 10. Adjusting mapping...")
+        # We'll create a mapping to 10 skin types based on L values
+        
+    # For Agglomerative Clustering, we need to compute cluster centers manually
+    cluster_centers = []
+    for i in unique_clusters:
+        indices = np.where(best_clusters == i)[0]
+        
+        if len(indices) == 0:
+            center = np.zeros(len(feature_cols))
+        else:
+            center = X.iloc[indices].mean().values
+            
+        cluster_centers.append(center)
+    
+    cluster_centers = np.array(cluster_centers)
+    
+    # Find L, A, B indices
+    l_index = feature_cols.index('avg_l')
+    a_index = feature_cols.index('avg_a')
+    b_index = feature_cols.index('avg_b')
+    
+    # Pre-sort clusters by L value (lighter to darker) before scoring
+    # This gives more predictable results
+    l_values = [center[l_index] for center in cluster_centers]
+    pre_sort = np.argsort(l_values)[::-1]  # Descending order (higher L = lighter)
+    
+    # Now calculate scores that incorporate A and B
+    skin_tone_scores = []
+    for i, idx in enumerate(pre_sort):
+        center = cluster_centers[idx]
+        l_value = 100 - center[l_index]  # L is 0-100, invert for ordering
+        a_value = center[a_index]
+        b_value = center[b_index]
+        
+        # Weight L more heavily to keep the lightness-based ordering
+        score = (0.60 * l_value) + (0.20 * a_value) + (0.20 * b_value)
+        # Add a small bias based on pre-sorting to maintain stable ordering
+        score += i * 0.01
+        skin_tone_scores.append((idx, score))
+    
+    # Sort by score
+    skin_tone_scores.sort(key=lambda x: x[1])
+    
+    # Create cluster_to_skin_type mapping
+    cluster_to_skin_type = {}
+    
+    # If we have exactly 10 clusters, direct 1:1 mapping
+    if n_clusters == 10:
+        for skin_type, (cluster_idx, _) in enumerate(skin_tone_scores, 1):
+            cluster = unique_clusters[cluster_idx]
+            cluster_to_skin_type[cluster] = skin_type
+    # If we have fewer than 10 clusters, some skin types will be skipped
+    elif n_clusters < 10:
+        # Map clusters to evenly spaced skin types
+        step = 9.0 / (n_clusters - 1)  # Ensure we use full range
+        for i, (cluster_idx, _) in enumerate(skin_tone_scores):
+            cluster = unique_clusters[cluster_idx]
+            skin_type = int(1 + i * step)
+            skin_type = min(10, max(1, skin_type))  # Ensure within 1-10 range
+            cluster_to_skin_type[cluster] = skin_type
+    # If more than 10 clusters, some will map to the same skin type
+    else:
+        # Map multiple clusters to 10 skin types
+        step = n_clusters / 10.0
+        for i, (cluster_idx, _) in enumerate(skin_tone_scores):
+            cluster = unique_clusters[cluster_idx]
+            skin_type = int(1 + i / step)
+            skin_type = min(10, max(1, skin_type))  # Ensure within 1-10 range
+            cluster_to_skin_type[cluster] = skin_type
+    
+    # Apply mapping to get predicted skin types
+    results_df = features_df.copy()
+    results_df['predicted_skin_type'] = [cluster_to_skin_type[c] for c in best_clusters]
+    
+    # Print distribution of final skin types
+    skin_type_counts = results_df['predicted_skin_type'].value_counts().sort_index()
+    print("Final distribution of skin types:")
+    print(skin_type_counts)
     
     return results_df
 
@@ -753,7 +1023,7 @@ def visualize_results(results_df, image_folder, output_folder):
         plt.savefig(os.path.join(output_folder, f'monk_type_{skin_type}_samples.png'), dpi=300)
         plt.close()
 
-def process_with_multiple_methods(csv_path, image_folder, output_folder, features_df=None, max_images=None, save_debug_masks=True):
+def process_with_multiple_methods(csv_path, image_folder, output_folder, features_df=None, max_images=None, save_debug_masks=True, methods=None):
     """
     Process the dataset using multiple clustering methods.
     
@@ -764,6 +1034,7 @@ def process_with_multiple_methods(csv_path, image_folder, output_folder, feature
         features_df: Pre-extracted features (if None, will extract features)
         max_images: Maximum number of images to process
         save_debug_masks: Whether to save mask visualizations
+        methods: Dictionary of methods to run (if None, runs all methods)
     """
     # Load metadata
     df = pd.read_csv(csv_path)
@@ -825,13 +1096,17 @@ def process_with_multiple_methods(csv_path, image_folder, output_folder, feature
         features_df.to_csv(features_path, index=False)
         print(f"Saved extracted features to {features_path}")
     
-    # Run each clustering method
-    clustering_methods = {
+    # Define all available clustering methods
+    all_methods = {
         'kmeans': classify_with_kmeans,
         'gmm': classify_with_gmm,
         'spectral': classify_with_spectral,
-        'dbscan': classify_with_dbscan
+        'dbscan': classify_with_dbscan,
+        'agglomerative': classify_with_agglomerative
     }
+    
+    # Use the specified methods or all methods
+    clustering_methods = methods if methods is not None else all_methods
     
     results = {}
     
@@ -887,8 +1162,9 @@ def process_with_multiple_methods(csv_path, image_folder, output_folder, feature
         print(f"\n{method_name.upper()} Skin Type Distribution:")
         print(final_df['predicted_skin_type'].value_counts().sort_index())
     
-    # Create comparison visualization
-    compare_methods(results, output_folder)
+    # Create comparison visualization if we have more than one method
+    if len(results) > 1:
+        compare_methods(results, output_folder)
     
     return results
 
@@ -946,12 +1222,27 @@ def main():
     os.makedirs(output_folder, exist_ok=True)
     
     # Set number of images to process
-    max_images = 100  # Set to None for all images
+    max_images = 2000  # Set to None for all images
     
-    # Process with multiple clustering methods
-    results = process_with_multiple_methods(csv_path, image_folder, output_folder, 
-                                           features_df=None, max_images=max_images,
-                                           save_debug_masks=True)
+    # Specify which methods to run (comment out any you don't want to run)
+    methods_to_run = {
+        'kmeans': classify_with_kmeans,
+        'gmm': classify_with_gmm,
+        'spectral': classify_with_spectral,
+        'dbscan': classify_with_dbscan,  
+        'agglomerative': classify_with_agglomerative 
+    }
+    
+    # Process with selected clustering methods
+    results = process_with_multiple_methods(
+        csv_path, 
+        image_folder, 
+        output_folder, 
+        features_df=None, 
+        max_images=max_images,
+        save_debug_masks=True,
+        methods=methods_to_run  # Pass the selected methods
+    )
     
     if results:
         print("\nClustering comparison complete!")

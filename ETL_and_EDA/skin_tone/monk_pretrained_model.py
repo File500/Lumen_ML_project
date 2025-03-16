@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from model.skin_tone_model import SkinToneClassifier
+from model.skin_tone_model import SkinToneClassifier, ResNetSkinToneClassifier, EfficientNetSkinToneClassifier
 
 # Define image transformations for the pre-trained model
 def get_transforms():
@@ -34,7 +34,8 @@ def load_pretrained_model(model_path):
         Loaded model and compute device
     """
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = SkinToneClassifier(num_classes=10)
+    #model = SkinToneClassifier(num_classes=10)
+    model = EfficientNetSkinToneClassifier(num_classes=10)
     
     # Load the model
     model.load_state_dict(torch.load(model_path, map_location=device))

@@ -1,25 +1,25 @@
 Test Accuracy: 0.7450
-Precision (macro): 0.6964
-Precision (weighted): 0.7562
-Recall (macro): 0.6486
+Precision (macro): 0.7134
+Precision (weighted): 0.7574
+Recall (macro): 0.7367
 Recall (weighted): 0.7450
-F1 Score (macro): 0.6580
-F1 Score (weighted): 0.7413
+F1 Score (macro): 0.7184
+F1 Score (weighted): 0.7460
 
 Detailed Classification Report:
               precision    recall  f1-score   support
 
-           1       0.91      0.90      0.90        87
-           2       0.65      0.83      0.73        24
-           3       0.81      0.88      0.84        86
-           4       0.75      0.38      0.50        16
-           5       0.50      0.38      0.43        13
-           6       0.92      0.57      0.71        40
-           7       0.71      0.79      0.75        53
-           8       0.51      0.62      0.56        29
-           9       0.54      0.62      0.58        32
-          10       0.67      0.50      0.57        20
+           1       0.88      0.92      0.90        25
+           2       0.61      0.59      0.60        59
+           3       0.72      0.88      0.79        43
+           4       0.81      0.80      0.81       127
+           5       0.50      0.67      0.57        15
+           6       0.39      0.41      0.40        17
+           7       0.76      0.87      0.81        15
+           8       0.85      0.69      0.76        42
+           9       0.94      0.67      0.78        43
+          10       0.67      0.86      0.75        14
 
     accuracy                           0.74       400
-   macro avg       0.70      0.65      0.66       400
-weighted avg       0.76      0.74      0.74       400
+   macro avg       0.71      0.74      0.72       400
+weighted avg       0.76      0.74      0.75       400
