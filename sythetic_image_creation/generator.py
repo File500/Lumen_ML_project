@@ -542,7 +542,9 @@ def main():
     parser.add_argument('--output_dir', type=str, default='generated_melanoma',
                         help='Directory to save generated images')
     parser.add_argument('--load_model', type=str, default=None,
-                        help='Path to pre-trained generator model to load (for generate mode, should end with .weights.h5)')
+                        help='Path to pre-trained generator model to load (should end with .weights.h5)')
+    parser.add_argument('--load_disc_model', type=str, default=None,
+                        help='Path to pre-trained discriminator model to load (should end with .weights.h5)')
     parser.add_argument('--continue_training', action='store_true',
                         help='Continue training from a previously saved model')
 
@@ -553,9 +555,14 @@ def main():
 
     if args.mode == 'train':
         if args.continue_training and args.load_model:
-            # Load pre-trained model for continuing training
-            print(f"Loading model from {args.load_model} to continue training")
-            gan.load_model(args.load_model)
+            # Load pre-trained models for continuing training
+            print(f"Loading generator model from {args.load_model} to continue training")
+            if args.load_disc_model:
+                print(f"Loading discriminator model from {args.load_disc_model} to continue training")
+                gan.load_model(args.load_model, args.load_disc_model)
+            else:
+                # Only load generator if discriminator isn't specified
+                gan.load_model(args.load_model)
 
         # Train the model
         gan.train(epochs=args.epochs)
