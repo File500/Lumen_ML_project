@@ -41,6 +41,8 @@ MANIFEST
 /data/skin_type_analysis/clustering_comparison/gmm
 /data/skin_type_analysis/clustering_comparison/kmeans
 /data/skin_type_analysis/clustering_comparison/spectral
+/data/skin_type_analysis/clustering_comparison/testing/sample_images
+/data/skin_type_analysis/clustering_comparison/testing/debug
 /data/skin_type_analysis/clustering_comparison/*.csv
 /data/skin_type_analysis/clustering_comparison/*.png
 /data/skin_type_analysis/clustering_comparisontesting

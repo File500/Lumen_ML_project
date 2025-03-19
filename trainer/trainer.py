@@ -15,7 +15,7 @@ def train():
     project_path = os.path.dirname(os.getcwd())
     config_file_path = os.path.join(project_path, "config.json")
     dataset_path = os.path.join(project_path, "data")
-    dataset_training_files = os.path.join(dataset_path, "ISIC_2020_Training_JPEG")
+    dataset_training_files = os.path.join(dataset_path, "train_224X224")
     dataset_training_metadata = os.path.join(dataset_path, "ISIC_2020_Training_GroundTruth_v2.csv")
     dataset_testing_files = os.path.join(dataset_path, "")
     dataset_testing_metadata = os.path.join(dataset_path, "ISIC_2020_Test_Metadata.csv")
