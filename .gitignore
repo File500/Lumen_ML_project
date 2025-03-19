@@ -35,7 +35,20 @@ MANIFEST
 #data
 /data/ISIC_2020_Training_JPEG/train/*.jpg
 /data/train_224X224/*.jpg
-/data/skin_type_analysis
+/data/skin_type_analysis/clustering_comparison/agglomerative
+/data/skin_type_analysis/clustering_comparison/dbscan
+/data/skin_type_analysis/clustering_comparison/general
+/data/skin_type_analysis/clustering_comparison/gmm
+/data/skin_type_analysis/clustering_comparison/kmeans
+/data/skin_type_analysis/clustering_comparison/spectral
+/data/skin_type_analysis/clustering_comparison/testing/sample_images
+/data/skin_type_analysis/clustering_comparison/testing/debug
+/data/skin_type_analysis/clustering_comparison/*.csv
+/data/skin_type_analysis/clustering_comparison/*.png
+/data/skin_type_analysis/clustering_comparisontesting
+/data/skin_type_analysis/model_predictions
+/data/skin_type_analysis/splits
+/data/skin_type_analysis/*.csv
 
 # Installer logs
 pip-log.txt

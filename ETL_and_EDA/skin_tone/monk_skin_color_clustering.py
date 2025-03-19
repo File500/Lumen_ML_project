@@ -89,19 +89,21 @@ def extract_skin_features_advanced(image_path):
         # KEEP pixels that are LIGHTER (higher L values)
         l_mean = np.mean(l_channel)
         l_std = np.std(l_channel)
-        l_mask = l_channel > l_mean - 0.5 * l_std  # KEEP pixels that are lighter
+        #l_mask = l_channel > l_mean - 0.5 * l_std  # KEEP pixels that are lighter
+        l_mask = l_channel > l_mean
         
         # 2. Redness mask (A channel)
         # KEEP pixels that are LESS RED (lower A values)
         a_mean = np.mean(a_channel)
         a_std = np.std(a_channel)
-        a_mask = a_channel < a_mean + 0.5 * a_std  # KEEP pixels that are less red
+        #a_mask = a_channel < a_mean + 0.5 * a_std  # KEEP pixels that are less red
+        a_mask = a_channel < a_mean
         
         # 3. Saturation mask (S channel)
         # KEEP pixels that are LESS SATURATED (lower S values)
         s_mean = np.mean(s_channel)
         s_std = np.std(s_channel)
-        s_mask = s_channel < s_mean + 0.5 * s_std  # KEEP pixels that are less saturated
+        s_mask = s_channel < s_mean # KEEP pixels that are less saturated
         
         # 4. Border mask - assume the edges are more likely to be normal skin
         h, w = img.shape[:2]
@@ -115,6 +117,23 @@ def extract_skin_features_advanced(image_path):
         border_mask[-border_width:, :] = True  # Bottom border
         border_mask[:, :border_width] = True  # Left border
         border_mask[:, -border_width:] = True  # Right border
+
+        center_x = w // 2
+        half_strip_width = int(w * 0.5 / 2)
+        
+        # Create mask (True = keep, False = exclude)
+        vertical_mask = np.ones((h, w), dtype=bool)
+        
+        # Set central vertical strip to False (exclude)
+        x_min = max(0, center_x - half_strip_width)
+        x_max = min(w, center_x + half_strip_width)
+        
+        vertical_mask[:, x_min:x_max] = False
+
+        edges = cv2.Canny(l_channel.astype(np.uint8), 50, 150)
+        kernel = np.ones((7,7), np.uint8)
+        edge_mask = cv2.dilate(edges, kernel, iterations=1)
+        edge_mask = edge_mask > 0
         
         # Combine the masks
         # 1. First approach: Keep pixels that are likely normal skin based on color features
@@ -123,7 +142,8 @@ def extract_skin_features_advanced(image_path):
         # 2. Second approach: Keep border regions
         # We will combine these approaches with OR because we want to keep EITHER
         # pixels that look like normal skin OR pixels that are in the border
-        final_mask = color_mask | border_mask
+        #final_mask = color_mask | border_mask
+        final_mask = color_mask  & ~edge_mask
         
         # Apply the mask to extract features from normal skin areas
         l_masked = l_channel[final_mask]
@@ -146,6 +166,15 @@ def extract_skin_features_advanced(image_path):
                 a_masked = a_channel.flatten()
                 b_masked = b_channel.flatten()
                 print(f"Warning: All masks too restrictive for {image_path}, using full image")
+
+        # After applying your mask but before the KMeans step:
+        if len(l_masked) > 200:
+            # Take only the top 50% brightest pixels
+            brightness_threshold = np.percentile(l_masked, 50)
+            brightest_indices = l_masked >= brightness_threshold
+            l_masked = l_masked[brightest_indices]
+            a_masked = a_masked[brightest_indices]
+            b_masked = b_masked[brightest_indices]
         
         # Use KMeans to find dominant colors
         pixels = np.column_stack((l_masked, a_masked, b_masked))
@@ -178,6 +207,8 @@ def extract_skin_features_advanced(image_path):
         features['std_a'] = np.std(a_masked)
         features['avg_b'] = np.mean(b_masked)
         features['std_b'] = np.std(b_masked)
+        features['skin_lesion_contrast'] = np.mean(l_masked) - np.percentile(l_channel, 5)
+        features['red_ratio'] = features['avg_a'] / features['avg_l']
         
         # Dominant color features (top 3 or fewer)
         for i in range(min(3, len(sorted_colors))):
@@ -194,7 +225,7 @@ def extract_skin_features_advanced(image_path):
     
 def save_masked_image_for_debug(image_path, output_folder, method_name=None, max_samples=10):
     """
-    Save visualizations of the corrected masking approach.
+    Save visualizations of the improved masking approach.
     
     Args:
         image_path: Path to the original image
@@ -202,20 +233,18 @@ def save_masked_image_for_debug(image_path, output_folder, method_name=None, max
         method_name: Name of clustering method (or None for general)
         max_samples: Maximum number of debug images to create per method
     """
-    # Use a counter to limit the number of debug images created
+    # Counter code remains the same
     if not hasattr(save_masked_image_for_debug, 'counters'):
         save_masked_image_for_debug.counters = {}
     
-    # Initialize counter for this method if needed
     if method_name not in save_masked_image_for_debug.counters:
         save_masked_image_for_debug.counters[method_name] = 0
         
-    # Check if we've reached the max samples for this method
     if save_masked_image_for_debug.counters[method_name] >= max_samples:
         return
         
     try:
-        # Create debug output folder
+        # Create debug folder - no changes needed
         if method_name:
             debug_folder = os.path.join(output_folder, method_name, 'mask_debug')
         else:
@@ -223,70 +252,90 @@ def save_masked_image_for_debug(image_path, output_folder, method_name=None, max
             
         os.makedirs(debug_folder, exist_ok=True)
         
-        # Read image
+        # Read image - no changes needed
         img = cv2.imread(image_path)
         if img is None:
             return
             
-        # Crop black lines
+        # Crop black lines - no changes needed
         img = crop_black_lines(img)
         
-        # Convert to color spaces
+        # Color conversions - no changes needed
         lab_img = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
         l_channel, a_channel, b_channel = cv2.split(lab_img)
         
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         h_channel, s_channel, v_channel = cv2.split(hsv)
         
-        # Create masks (True = keep, False = exclude)
-        
-        # 1. Lightness mask (L channel)
+        # Create masks with the improved thresholds
+        # 1. More aggressive lightness mask
         l_mean = np.mean(l_channel)
         l_std = np.std(l_channel)
-        l_mask = l_channel > l_mean - 0.5 * l_std  # Lighter pixels
+        l_mask = l_channel > l_mean  # More aggressive threshold
         
-        # 2. Redness mask (A channel)
+        # 2. Stricter redness mask
         a_mean = np.mean(a_channel)
         a_std = np.std(a_channel)
-        a_mask = a_channel < a_mean + 0.5 * a_std  # Less red pixels
+        a_mask = a_channel < a_mean# Stricter threshold
         
-        # 3. Saturation mask (S channel)
+        # 3. Stricter saturation mask
         s_mean = np.mean(s_channel)
         s_std = np.std(s_channel)
-        s_mask = s_channel < s_mean + 0.5 * s_std  # Less saturated pixels
+        s_mask = s_channel < s_mean # Stricter threshold
         
-        # 4. Border mask
+        # 4. Smaller border mask
         h, w = img.shape[:2]
-        border_width = int(min(h, w) * 0.2)
+        border_width = int(min(h, w) * 0.20)  
         border_mask = np.zeros((h, w), dtype=bool)
-        border_mask[:border_width, :] = True  # Top border
-        border_mask[-border_width:, :] = True  # Bottom border
-        border_mask[:, :border_width] = True  # Left border
-        border_mask[:, -border_width:] = True  # Right border
+        border_mask[:border_width, :] = True
+        border_mask[-border_width:, :] = True
+        border_mask[:, :border_width] = True
+        border_mask[:, -border_width:] = True
+
+        # Calculate central region boundaries
+        center_x = w // 2
+        half_strip_width = int(w * 0.5 / 2)
+        
+        # Create mask (True = keep, False = exclude)
+        vertical_mask = np.ones((h, w), dtype=bool)
+        
+        # Set central vertical strip to False (exclude)
+        x_min = max(0, center_x - half_strip_width)
+        x_max = min(w, center_x + half_strip_width)
+        
+        vertical_mask[:, x_min:x_max] = False
+        
+        # 5. NEW: Add edge detection
+        edges = cv2.Canny(l_channel.astype(np.uint8), 50, 150)
+        kernel = np.ones((7,7), np.uint8)
+        edge_mask = cv2.dilate(edges, kernel, iterations=1)
+        edge_mask = edge_mask > 0
         
         # Combine masks
         color_mask = l_mask & a_mask & s_mask
-        final_mask = color_mask | border_mask
         
-        # Create visualizations
-        # Original image
+        # Old mask for comparison
+        old_final_mask = color_mask | border_mask
+        
+        # New mask that also excludes edges
+        new_final_mask = color_mask & ~edge_mask
+        
+        # Create visualizations - similar to before but with some additions
         original = img.copy()
         
-        # For LAB and HSV channels, normalize for better visibility
+        # Channel visualizations - no changes needed
         l_viz = cv2.normalize(l_channel, None, 0, 255, cv2.NORM_MINMAX)
         a_viz = cv2.normalize(a_channel, None, 0, 255, cv2.NORM_MINMAX)
         b_viz = cv2.normalize(b_channel, None, 0, 255, cv2.NORM_MINMAX)
-        
         s_viz = cv2.normalize(s_channel, None, 0, 255, cv2.NORM_MINMAX)
         
-        # Convert to 3-channel for display
         l_viz_color = cv2.cvtColor(l_viz, cv2.COLOR_GRAY2BGR)
         a_viz_color = cv2.cvtColor(a_viz, cv2.COLOR_GRAY2BGR)
         s_viz_color = cv2.cvtColor(s_viz, cv2.COLOR_GRAY2BGR)
         
-        # Visualize what's kept (original color) vs excluded (black)
+        # Kept regions visualizations
         l_kept = img.copy()
-        l_kept[~l_mask] = [0, 0, 0]  # Black out excluded regions
+        l_kept[~l_mask] = [0, 0, 0]
         
         a_kept = img.copy()
         a_kept[~a_mask] = [0, 0, 0]
@@ -296,17 +345,27 @@ def save_masked_image_for_debug(image_path, output_folder, method_name=None, max
         
         border_kept = img.copy()
         border_kept[~border_mask] = [0, 0, 0]
+
+        central_kept = img.copy()
+        central_kept[~vertical_mask] = [0, 0, 0]
         
         color_kept = img.copy()
         color_kept[~color_mask] = [0, 0, 0]
         
-        final_kept = img.copy()
-        final_kept[~final_mask] = [0, 0, 0]
+        # NEW: Edge visualization
+        edge_viz = np.zeros_like(img)
+        edge_viz[edge_mask] = [0, 0, 255]  # Red for edges
         
-        # Visualize what's excluded (original color) vs kept (black)
-        # This helps see if lesions are properly excluded
+        # Visualize old and new final masks
+        old_final_kept = img.copy()
+        old_final_kept[~old_final_mask] = [0, 0, 0]
+        
+        new_final_kept = img.copy()
+        new_final_kept[~new_final_mask] = [0, 0, 0]
+        
+        # Exclusion visualizations
         l_excluded = img.copy()
-        l_excluded[l_mask] = [0, 0, 0]  # Black out kept regions
+        l_excluded[l_mask] = [0, 0, 0]
         
         a_excluded = img.copy()
         a_excluded[a_mask] = [0, 0, 0]
@@ -317,33 +376,50 @@ def save_masked_image_for_debug(image_path, output_folder, method_name=None, max
         color_excluded = img.copy()
         color_excluded[color_mask] = [0, 0, 0]
         
-        final_excluded = img.copy()
-        final_excluded[final_mask] = [0, 0, 0]
+        # NEW: Edge exclusion visualization
+        non_edge_excluded = img.copy()
+        non_edge_excluded[~edge_mask] = [0, 0, 0]  # Show only edges
         
-        # Extract image name for the output filename
+        old_final_excluded = img.copy()
+        old_final_excluded[old_final_mask] = [0, 0, 0]
+        
+        new_final_excluded = img.copy()
+        new_final_excluded[new_final_mask] = [0, 0, 0]
+        
+        # Extract image name
         img_name = os.path.splitext(os.path.basename(image_path))[0]
         
-        # Save visualizations
+        # Save visualizations - standard images
         cv2.imwrite(os.path.join(debug_folder, f"{img_name}_01_original.jpg"), original)
-        
         cv2.imwrite(os.path.join(debug_folder, f"{img_name}_02_L_channel.jpg"), l_viz_color)
         cv2.imwrite(os.path.join(debug_folder, f"{img_name}_03_A_channel.jpg"), a_viz_color)
         cv2.imwrite(os.path.join(debug_folder, f"{img_name}_04_S_channel.jpg"), s_viz_color)
         
+        # Save mask visualizations
         cv2.imwrite(os.path.join(debug_folder, f"{img_name}_05_L_kept.jpg"), l_kept)
         cv2.imwrite(os.path.join(debug_folder, f"{img_name}_06_A_kept.jpg"), a_kept)
         cv2.imwrite(os.path.join(debug_folder, f"{img_name}_07_S_kept.jpg"), s_kept)
         cv2.imwrite(os.path.join(debug_folder, f"{img_name}_08_border_kept.jpg"), border_kept)
+        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_08a_central_kept.jpg"), central_kept)
         cv2.imwrite(os.path.join(debug_folder, f"{img_name}_09_color_kept.jpg"), color_kept)
-        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_10_final_kept.jpg"), final_kept)
         
+        # NEW: Save new visualizations
+        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_10a_edges_detected.jpg"), edge_viz)
+        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_10b_old_final_kept.jpg"), old_final_kept)
+        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_10c_new_final_kept.jpg"), new_final_kept)
+        
+        # Save exclusion visualizations
         cv2.imwrite(os.path.join(debug_folder, f"{img_name}_11_L_excluded.jpg"), l_excluded)
         cv2.imwrite(os.path.join(debug_folder, f"{img_name}_12_A_excluded.jpg"), a_excluded)
         cv2.imwrite(os.path.join(debug_folder, f"{img_name}_13_S_excluded.jpg"), s_excluded)
         cv2.imwrite(os.path.join(debug_folder, f"{img_name}_14_color_excluded.jpg"), color_excluded)
-        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_15_final_excluded.jpg"), final_excluded)
         
-        # Increment counter for this method
+        # NEW: Save new exclusion visualizations
+        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_15a_edges_only.jpg"), non_edge_excluded)
+        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_15b_old_final_excluded.jpg"), old_final_excluded)
+        cv2.imwrite(os.path.join(debug_folder, f"{img_name}_15c_new_final_excluded.jpg"), new_final_excluded)
+        
+        # Increment counter
         save_masked_image_for_debug.counters[method_name] += 1
         
     except Exception as e:
@@ -367,11 +443,13 @@ def classify_with_kmeans(features_df, output_folder):
     X = features_df[feature_cols].copy()
     
     # Normalize features
-    X = (X - X.mean()) / X.std()
+    #X = (X - X.mean()) / X.std()
+    scaler = MinMaxScaler()
+    X = pd.DataFrame(scaler.fit_transform(X), columns=X.columns)
     
     # Use KMeans to cluster the data into 10 clusters (for 10 Monk skin types)
     print("Running K-means clustering...")
-    kmeans = KMeans(n_clusters=10, random_state=42, n_init=10)
+    kmeans = KMeans(n_clusters=10, random_state=42, n_init=20)
     kmeans.fit(X)
     
     # Get cluster assignments
@@ -395,7 +473,7 @@ def classify_with_kmeans(features_df, output_folder):
         b_value = center[b_index]         # b can be negative (blue) or positive (yellow)
         
         # Simple weighted score
-        score = (0.55 * l_value) + (0.25 * a_value) + (0.20 * b_value)
+        score = (0.4 * l_value) + (0.30 * a_value) + (0.30 * b_value)
         skin_tone_scores.append(score)
     
     # Sort clusters by skin tone score (lower to higher = lighter to darker)
@@ -587,7 +665,7 @@ def classify_with_spectral(features_df, output_folder):
     spectral = SpectralClustering(
         n_clusters=10,
         random_state=42,
-        affinity='rbf',  
+        affinity='kmeans',  
         gamma=0.1,  # Adjust gamma for more natural clustering
         n_neighbors=20,
         assign_labels='discretize',
@@ -848,12 +926,17 @@ def classify_with_agglomerative(features_df, output_folder):
                     best_clusters = clusters.copy()
                     best_combo = combo
     
+    #After selecting the best clustering
     if best_clusters is None:
         print("Could not find a balanced clustering. Falling back to KMeans.")
         kmeans = KMeans(n_clusters=10, random_state=42, n_init=10)
         best_clusters = kmeans.fit_predict(X_std)
+        best_scaled_X = X_std  # Save the scaled data used for clustering
+        best_combo = "kmeans_std"
     else:
         print(f"Selected {best_combo} with CV={best_cv:.3f}")
+        # Save which scaled version was used
+        best_scaled_X = X_std if "std" in best_combo else X_minmax
     
     # Get unique clusters
     unique_clusters = np.unique(best_clusters)
@@ -872,8 +955,20 @@ def classify_with_agglomerative(features_df, output_folder):
         if len(indices) == 0:
             center = np.zeros(len(feature_cols))
         else:
-            center = X.iloc[indices].mean().values
+            # Use best_scaled_X to find the center in the same scaled space
+            scaled_center = np.mean(best_scaled_X[indices], axis=0)
             
+            # If you want centers in the original feature space, inverse transform:
+            if "std" in best_combo:
+                scaler = StandardScaler().fit(X)
+                # Reshape for inverse_transform
+                center = scaler.inverse_transform([scaled_center])[0]
+            elif "minmax" in best_combo:
+                scaler = MinMaxScaler().fit(X)
+                center = scaler.inverse_transform([scaled_center])[0]
+            else:
+                center = scaled_center
+        
         cluster_centers.append(center)
     
     cluster_centers = np.array(cluster_centers)
@@ -897,7 +992,7 @@ def classify_with_agglomerative(features_df, output_folder):
         b_value = center[b_index]
         
         # Weight L more heavily to keep the lightness-based ordering
-        score = (0.60 * l_value) + (0.20 * a_value) + (0.20 * b_value)
+        score = (0.4 * l_value) + (0.30 * a_value) + (0.30 * b_value)
         # Add a small bias based on pre-sorting to maintain stable ordering
         score += i * 0.01
         skin_tone_scores.append((idx, score))
@@ -1183,7 +1278,7 @@ def compare_methods(results_dict, output_folder):
     n_methods = len(methods)
     
     # Set up color cycle
-    colors = ['skyblue', 'salmon', 'lightgreen', 'plum']
+    colors = ['skyblue', 'salmon', 'lightgreen', 'plum', 'red']
     
     # Create subplots
     for i, method in enumerate(methods):
@@ -1222,14 +1317,14 @@ def main():
     os.makedirs(output_folder, exist_ok=True)
     
     # Set number of images to process
-    max_images = 2000  # Set to None for all images
+    max_images = 500  # Set to None for all images
     
     # Specify which methods to run (comment out any you don't want to run)
     methods_to_run = {
         'kmeans': classify_with_kmeans,
-        'gmm': classify_with_gmm,
-        'spectral': classify_with_spectral,
-        'dbscan': classify_with_dbscan,  
+        #'gmm': classify_with_gmm,
+        #'spectral': classify_with_spectral,
+        #'dbscan': classify_with_dbscan,  
         'agglomerative': classify_with_agglomerative 
     }
     
