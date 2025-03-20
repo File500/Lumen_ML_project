@@ -1,19 +1,81 @@
 import os
 import datetime
 import numpy as np
+import pandas as pd
+import seaborn as sns
 import torch
 import torch.optim as optim
 import torch.nn as nn
 import torchvision.transforms as transforms
-import torchvision.datasets as datasets
-from torch.utils.data import DataLoader, random_split
-from model.model import MelanomaClassifier 
-import PIL
+from torch.utils.data import DataLoader, Dataset, random_split
 from PIL import Image
-import tqdm
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-# import ignite
+from tqdm import tqdm
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_curve, auc, confusion_matrix
+from sklearn.model_selection import train_test_split
+import matplotlib.pyplot as plt
 
+
+class MelanomaDataset(Dataset):
+    def __init__(self, dataframe, img_dir, transform=None, binary_mode=True):
+        """
+        Args:
+            dataframe (pandas.DataFrame): DataFrame containing image info and labels
+            img_dir (string): Directory with all the images
+            transform (callable, optional): Optional transform to be applied on a sample
+            binary_mode (bool): Whether to use binary mode (single output) or multi-class mode
+        """
+        self.data_frame = dataframe
+        self.img_dir = img_dir
+        self.binary_mode = binary_mode
+        
+        if transform is None:
+            self.transform = transforms.Compose([
+                #transforms.Resize((224, 224)),
+                transforms.ToTensor(),
+                #transforms.Normalize(mean=[0.485, 0.456, 0.406], 
+                #                     std=[0.229, 0.224, 0.225])
+            ])
+        else:
+            self.transform = transform
+            
+    def __len__(self):
+        return len(self.data_frame)
+    
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+            
+        img_name = self.data_frame.iloc[idx, 0]
+
+        # Check if extension is missing and add .jpg if needed
+        if not img_name.lower().endswith(('.jpg', '.jpeg', '.png')):
+            img_name = img_name + '.jpg'
+        
+        # Create full path
+        img_path = os.path.join(self.img_dir, img_name)
+
+        # Try to open the image
+        try:
+            image = Image.open(img_path).convert('RGB')
+        except FileNotFoundError:
+            print(f"Warning: Image not found at {img_path}")
+            # Provide a fallback or raise a more informative error
+            raise FileNotFoundError(f"Could not find image: {img_path}")
+        
+        # Get the target label (0 for benign, 1 for malignant)
+        target = self.data_frame.iloc[idx, 8]  # Assuming 'target' is at column 8
+        
+        if self.binary_mode:
+            # For BCEWithLogitsLoss - single output with value 0 or 1
+            target = torch.tensor(target, dtype=torch.float).unsqueeze(0)
+        else:
+            # For CrossEntropyLoss - class index (no one-hot encoding needed)
+            target = torch.tensor(target, dtype=torch.long)
+        
+        if self.transform:
+            image = self.transform(image)
+            
+        return image, target
 
 
 def load_model(model_path, model, optimizer):
@@ -35,18 +97,9 @@ def load_model(model_path, model, optimizer):
 
 
 def create_data_loader(data, batch_size, num_workers, shuffle):
-    dataloader = DataLoader(data, batch_size=batch_size, num_workers=num_workers, shuffle=shuffle)
+    dataloader = DataLoader(data, batch_size=batch_size, num_workers=num_workers, shuffle=shuffle, pin_memory=True)
     return dataloader
 
-def get_transforms():
-    transform = transforms.Compose([
-        #transforms.Resize("", PIL.Image.LANCZOS),
-        #transforms.Grayscale(),
-        transforms.ToTensor(), 
-        #transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
-    ])
-    
-    return transform
 
 def get_device():
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -54,31 +107,102 @@ def get_device():
     return device
 
 
-
 class ModelTrainer:
-    def __init__(self, training_data, validation_data, test_data, training_batch_size, num_workers, shuffle,
-                 training_checkpoint_data_count, validation_checkpoint_data_count, loss_fn,
-                 epochs_to_train,  model=None, optimizer=None, start_epoch=1):
+    def __init__(self, dataset_path, csv_file, img_dir, training_batch_size, num_workers, shuffle,
+            train_val_test_split=[0.7, 0.15, 0.15], loss_fn=None, epochs_to_train=10, 
+            model=None, optimizer=None, start_epoch=1, binary_mode=True):
+    
+        self.binary_mode = binary_mode
+
+        # Load the CSV file
+        full_df = pd.read_csv(csv_file)
         
-        # Splitting training and validation data into subsets for checkpoints
-        #train_subsets = self.create_random_dataset_with_checkpoints(training_checkpoint_data_count, training_data)
-        #val_subsets = self.create_random_dataset_with_checkpoints(validation_checkpoint_data_count, validation_data)
+        # Check class distribution in the dataset
+        benign_count = sum(full_df['target'] == 0)
+        malignant_count = sum(full_df['target'] == 1)
+        print(f"Dataset class distribution:")
+        print(f"  Benign: {benign_count} ({benign_count/len(full_df)*100:.2f}%)")
+        print(f"  Malignant: {malignant_count} ({malignant_count/len(full_df)*100:.2f}%)")
+        
+        # Perform stratified train/val/test split to maintain class distribution
+        train_size, val_size, test_size = train_val_test_split
+        
+        # First split into train and temp (val+test combined) with stratification
+        train_df, temp_df = train_test_split(
+            full_df, 
+            test_size=(val_size + test_size),
+            stratify=full_df['target'],  # This ensures the same ratio of malignant samples
+            random_state=42
+        )
+        
+        # Then split temp into val and test with stratification
+        val_df, test_df = train_test_split(
+            temp_df,
+            test_size=(test_size / (val_size + test_size)),
+            stratify=temp_df['target'],  # Maintain class distribution in val and test sets
+            random_state=42
+        )
+        
+        # Verify class distribution in each split
+        print(f"Training set: {len(train_df)} samples")
+        print(f"  Benign: {sum(train_df['target'] == 0)} ({sum(train_df['target'] == 0)/len(train_df)*100:.2f}%)")
+        print(f"  Malignant: {sum(train_df['target'] == 1)} ({sum(train_df['target'] == 1)/len(train_df)*100:.2f}%)")
+        
+        print(f"Validation set: {len(val_df)} samples")
+        print(f"  Benign: {sum(val_df['target'] == 0)} ({sum(val_df['target'] == 0)/len(val_df)*100:.2f}%)")
+        print(f"  Malignant: {sum(val_df['target'] == 1)} ({sum(val_df['target'] == 1)/len(val_df)*100:.2f}%)")
+        
+        print(f"Test set: {len(test_df)} samples") 
+        print(f"  Benign: {sum(test_df['target'] == 0)} ({sum(test_df['target'] == 0)/len(test_df)*100:.2f}%)")
+        print(f"  Malignant: {sum(test_df['target'] == 1)} ({sum(test_df['target'] == 1)/len(test_df)*100:.2f}%)")
+        
+        # Save split datasets for reference
+        train_df.to_csv(os.path.join(dataset_path, 'train_split.csv'),index=False)
+        val_df.to_csv(os.path.join(dataset_path, 'val_split.csv'), index=False)
+        test_df.to_csv(os.path.join(dataset_path, 'test_split.csv'), index=False)
+        
+        print(f"Data split complete.")
+        print(f"  Training samples: {len(train_df)}")
+        print(f"  Validation samples: {len(val_df)}")
+        print(f"  Test samples: {len(test_df)}")
+        
+        # Data augmentation for training
+        train_transform = transforms.Compose([
+            #transforms.Resize((224, 224)),
+            #transforms.RandomHorizontalFlip(),
+            #transforms.RandomVerticalFlip(),
+            #transforms.RandomRotation(20),
+            #transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.05),
+            transforms.ToTensor(),
+            #transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
 
-        #self.training_dataloader = self.create_dataloaders_for_subset_data(train_subsets, training_batch_size, num_workers, shuffle)
-        #self.validation_dataloader = self.create_dataloaders_for_subset_data(val_subsets, 1, num_workers, shuffle)
-        #self.test_dataloader = create_data_loader(test_data, 1, num_workers, shuffle)
+        # For validation and test (no augmentation)
+        eval_transform = transforms.Compose([
+            #transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            #transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
 
-        self.training_dataloader = create_data_loader(training_data, training_batch_size, num_workers, shuffle)
-        self.validation_dataloader = create_data_loader(validation_data, training_batch_size, num_workers, shuffle)
+        # Create datasets
+        train_dataset = MelanomaDataset(dataframe=train_df, img_dir=img_dir, transform=train_transform, binary_mode=self.binary_mode)
+        val_dataset = MelanomaDataset(dataframe=val_df, img_dir=img_dir, transform=eval_transform, binary_mode=self.binary_mode)
+        test_dataset = MelanomaDataset(dataframe=test_df, img_dir=img_dir, transform=eval_transform, binary_mode=self.binary_mode)
+        
+        # Create data loaders
+        self.training_dataloader = create_data_loader(train_dataset, training_batch_size, num_workers, shuffle)
+        self.validation_dataloader = create_data_loader(val_dataset, training_batch_size, num_workers, False)
+        self.test_dataloader = create_data_loader(test_dataset, training_batch_size, num_workers, False)
 
-        self.loss_fn = loss_fn
+        self.loss_fn = loss_fn if loss_fn is not None else nn.BCEWithLogitsLoss()
         self.epochs_to_train = epochs_to_train
-        self.start_epoch = start_epoch 
-        #self.transform = get_transforms()
+        self.start_epoch = start_epoch
         self.device = get_device()
+        self.test_df = test_df  # Save for later use
 
         if model is None:
-            self.model = model
+            print("Warning: No model provided to ModelTrainer")
+            self.model = None
         else:
             self.model = model.to(self.device)
 
@@ -93,18 +217,6 @@ class ModelTrainer:
     def set_model_and_optimizer(self, model, optimizer):
         self.set_model(model)
         self.set_optimizer(optimizer)
-
-    def create_dataloaders_for_subset_data(self, subsets, batch_size, num_workers, shuffle):
-        return [create_data_loader(subset, batch_size, num_workers, shuffle) for subset in subsets]
-    
-    def create_random_dataset_with_checkpoints(self, checkpoint_data_count, full_dataset):
-        num_chunks = len(full_dataset) // checkpoint_data_count
-        split_sizes = [checkpoint_data_count] * num_chunks
-        remainder = len(full_dataset) % checkpoint_data_count
-        if remainder > 0:
-            split_sizes.append(remainder) 
-
-        return random_split(full_dataset, split_sizes)
 
     def create_model_state_dict(self, epoch, train_loss, val_loss, train_metrics, val_metrics):
         model_state = {
@@ -128,15 +240,7 @@ class ModelTrainer:
 
         return model_state
 
-    def save_model(self, train_loss, val_loss, epoch, train_metrics, val_metrics, best):
-        model_state = self.create_model_state_dict(epoch, train_loss, val_loss, train_metrics, val_metrics)
-        save_path = os.path.join(os.path.dirname(os.getcwd()), "trained_model")
-
-        torch.save(model_state, os.path.join(save_path, "last-model.pt"))
-        if best:
-            torch.save(model_state, os.path.join(save_path, "best-model.pt"))
-
-    def train_epoch(self, ):
+    def train_epoch(self):
         self.model.train()
         train_loss = []
         all_preds = []
@@ -149,7 +253,7 @@ class ModelTrainer:
 
             predicted_data = self.model(image_batch)
 
-            loss = self.loss_fn(predicted_data, labels.float())
+            loss = self.loss_fn(predicted_data, labels)
 
             self.optimizer.zero_grad()
             loss.backward()
@@ -157,48 +261,339 @@ class ModelTrainer:
             loop.set_postfix(loss=loss.item())
             train_loss.append(loss.detach().cpu().numpy())
 
-            preds = torch.sigmoid(predicted_data).round().cpu().numpy()
+            # Handle predictions based on model output
+            if len(predicted_data.shape) == 1 or predicted_data.shape[1] == 1:  # Binary with single output
+                preds = torch.sigmoid(predicted_data).round().detach().cpu().numpy()
+            else:  # Multi-class with multiple outputs
+                preds = torch.argmax(predicted_data, dim=1, keepdim=True).detach().cpu().numpy()
+                
             all_preds.extend(preds)
-            all_labels.extend(labels.cpu().numpy())
+            all_labels.extend(labels.detach().cpu().numpy())
 
+        # Flatten lists for metric calculation
+        all_preds = np.array(all_preds).flatten()
+        all_labels = np.array(all_labels).flatten()
+        
         accuracy = accuracy_score(all_labels, all_preds)
-        precision = precision_score(all_labels, all_preds, zero_division=0)
-        recall = recall_score(all_labels, all_preds, zero_division=0)
-        f1 = f1_score(all_labels, all_preds, zero_division=0)
+        # Explicitly specify positive class as 1 (malignant)
+        precision = precision_score(all_labels, all_preds, zero_division=0, pos_label=1)
+        recall = recall_score(all_labels, all_preds, zero_division=0, pos_label=1)
+        f1 = f1_score(all_labels, all_preds, zero_division=0, pos_label=1)
 
         return np.mean(train_loss), accuracy, precision, recall, f1
-    
-    def validate_epoch(self, ):
+
+    def evaluate(self, dataloader, desc="Evaluating"):
         self.model.eval()
 
         with torch.no_grad():
-            val_losses = []
+            losses = []
             all_preds = []
             all_labels = []
 
-            loop = tqdm(self.validation_dataloader, leave=False)
+            loop = tqdm(dataloader, leave=False, desc=desc)
             for image_batch, labels in loop:
+                image_batch = image_batch.to(self.device)
                 labels = labels.to(self.device)
-                for windowed_batch in image_batch:
-                    windowed_batch = windowed_batch.to(self.device)
 
-                    predicted_data = self.model(windowed_batch)
-                    loss = self.loss_fn(predicted_data, labels.float())
-                    val_losses.append(loss.detach().cpu().numpy())
+                predicted_data = self.model(image_batch)
+                loss = self.loss_fn(predicted_data, labels)
+                losses.append(loss.detach().cpu().numpy())
 
+                # Handle predictions based on model output
+                if len(predicted_data.shape) == 1 or predicted_data.shape[1] == 1:  # Binary with single output
                     preds = torch.sigmoid(predicted_data).round().cpu().numpy()
-                    all_preds.extend(preds)
-                    all_labels.extend(labels.cpu().numpy())
+                else:  # Multi-class with multiple outputs
+                    preds = torch.argmax(predicted_data, dim=1, keepdim=True).cpu().numpy()
+                    
+                all_preds.extend(preds)
+                all_labels.extend(labels.cpu().numpy())
 
-                    loop.set_postfix(loss=loss.item())
+                loop.set_postfix(loss=loss.item())
 
+            # Flatten lists for metric calculation
+            all_preds = np.array(all_preds).flatten()
+            all_labels = np.array(all_labels).flatten()
+            
             accuracy = accuracy_score(all_labels, all_preds)
-            precision = precision_score(all_labels, all_preds, zero_division=0)
-            recall = recall_score(all_labels, all_preds, zero_division=0)
-            f1 = f1_score(all_labels, all_preds, zero_division=0)
+            # Explicitly specify positive class as 1 (malignant)
+            precision = precision_score(all_labels, all_preds, zero_division=0, pos_label=1)
+            recall = recall_score(all_labels, all_preds, zero_division=0, pos_label=1)
+            f1 = f1_score(all_labels, all_preds, zero_division=0, pos_label=1)
 
-        return np.mean(val_losses), accuracy, precision, recall, f1
+        return np.mean(losses), accuracy, precision, recall, f1
+    
+    def validate_epoch(self):
+        return self.evaluate(self.validation_dataloader, desc="Validating")
 
+    def plot_roc_curve(self, dataloader=None, device=None):
+        # Use test_dataloader if no dataloader provided
+        if dataloader is None:
+            dataloader = self.test_dataloader
+        
+        # Rest of the existing implementation remains the same
+        # Replace `model` with `self.model`
+        device = device or self.device
+        
+        # Set model to evaluation mode
+        self.model.eval()
+        
+        # Collect all predictions and true labels
+        all_preds = []
+        all_labels = []
+        
+        # Disable gradient calculation
+        with torch.no_grad():
+            for images, labels in dataloader:
+                # Move data to appropriate device
+                images = images.to(device)
+                labels = labels.to(device)
+                
+                # Get model predictions (probabilities)
+                outputs = torch.sigmoid(self.model(images)).cpu().numpy()
+                
+                # Flatten labels
+                labels = labels.cpu().numpy().flatten()
+                
+                all_preds.extend(outputs)
+                all_labels.extend(labels)
+        
+        # Convert to numpy arrays
+        all_preds = np.array(all_preds).flatten()
+        all_labels = np.array(all_labels).flatten()
+        
+        # Calculate ROC curve
+        fpr, tpr, thresholds = roc_curve(all_labels, all_preds)
+        roc_auc = auc(fpr, tpr)
+        
+        # Plot ROC curve
+        plt.figure(figsize=(10, 6))
+        plt.plot(fpr, tpr, color='darkorange', lw=2, 
+                label=f'ROC curve (AUC = {roc_auc:.2f})')
+        plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('Receiver Operating Characteristic (ROC) Curve')
+        plt.legend(loc="lower right")
+        
+        # Save the plot
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_path = os.path.dirname(current_dir)
+        save_path = os.path.join(project_path, "trained_model", "melanoma_classifier")
+        os.makedirs(save_path, exist_ok=True)
+        
+        plt.savefig(os.path.join(save_path, 'roc_curve.png'))
+        plt.close()
+        
+        return roc_auc
+    
+    def plot_confusion_matrix(self, dataloader=None, device=None, class_names=None):
+        """
+        Generate and plot confusion matrix for a PyTorch model
+        
+        Args:
+        - dataloader: DataLoader with test/validation data. Defaults to test_dataloader
+        - device: Torch device (cuda/cpu). If None, will auto-detect.
+        - class_names: List of class names. Defaults to ['Benign', 'Malignant']
+        
+        Returns:
+        - Confusion matrix as numpy array
+        """
+        # Use test_dataloader if no dataloader provided
+        if dataloader is None:
+            dataloader = self.test_dataloader
+        
+        # Use class device if not specified
+        device = device or self.device
+        
+        # Default class names if not provided
+        if class_names is None:
+            class_names = ['Benign', 'Malignant']
+        
+        # Set model to evaluation mode
+        self.model.eval()
+        
+        # Collect all predictions and true labels
+        all_preds = []
+        all_labels = []
+        
+        # Disable gradient calculation
+        with torch.no_grad():
+            for images, labels in dataloader:
+                # Move data to appropriate device
+                images = images.to(device)
+                labels = labels.to(device)
+                
+                # Get model predictions
+                outputs = self.model(images)
+                
+                # For binary classification with sigmoid
+                preds = torch.sigmoid(outputs).round().cpu().numpy()
+                
+                # Flatten labels
+                labels = labels.cpu().numpy().flatten()
+                preds = preds.flatten()
+                
+                all_preds.extend(preds)
+                all_labels.extend(labels)
+        
+        # Convert to numpy arrays
+        all_preds = np.array(all_preds)
+        all_labels = np.array(all_labels)
+        
+        # Calculate confusion matrix
+        cm = confusion_matrix(all_labels, all_preds)
+        
+        # Create a more detailed confusion matrix plot
+        plt.figure(figsize=(10, 7))
+        
+        # Create heatmap with more detailed formatting
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                    xticklabels=class_names, 
+                    yticklabels=class_names,
+                    cbar=True)
+        
+        plt.title('Confusion Matrix for Melanoma Classification', fontsize=15)
+        plt.xlabel('Predicted Label', fontsize=12)
+        plt.ylabel('True Label', fontsize=12)
+        
+        # Add some explanatory text
+        tn, fp, fn, tp = cm.ravel()
+        plt.text(1.1, -0.1, 
+                f'True Negatives: {tn}\n'
+                f'False Positives: {fp}\n'
+                f'False Negatives: {fn}\n'
+                f'True Positives: {tp}', 
+                horizontalalignment='left',
+                verticalalignment='center',
+                transform=plt.gca().transAxes)
+        
+        # Save the plot
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_path = os.path.dirname(current_dir)
+        save_path = os.path.join(project_path, "trained_model", "melanoma_classifier")
+        os.makedirs(save_path, exist_ok=True)
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_path, 'confusion_matrix.png'), dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # Print out confusion matrix details
+        print("\nConfusion Matrix Details:")
+        print(f"True Negatives: {tn}")
+        print(f"False Positives: {fp}")
+        print(f"False Negatives: {fn}")
+        print(f"True Positives: {tp}")
+        
+        return cm
+    def plot_training_history(self, history):
+        """
+        Plot training and validation metrics over epochs
+        
+        Args:
+            history: Dictionary containing lists of metrics per epoch
+        """
+        # Create directory for saving plots
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_path = os.path.dirname(current_dir)
+        save_path = os.path.join(project_path, "trained_model", "melanoma_classifier")
+        os.makedirs(save_path, exist_ok=True)
+        
+        # Create figure with multiple subplots
+        fig, axs = plt.subplots(2, 2, figsize=(20, 15))
+        
+        # Plot Loss
+        axs[0, 0].plot(history['train_loss'], label='Training Loss')
+        axs[0, 0].plot(history['val_loss'], label='Validation Loss')
+        axs[0, 0].set_title('Loss over Epochs', fontsize=15)
+        axs[0, 0].set_xlabel('Epoch', fontsize=12)
+        axs[0, 0].set_ylabel('Loss', fontsize=12)
+        axs[0, 0].legend()
+        axs[0, 0].grid(True)
+        
+        # Plot Accuracy
+        axs[0, 1].plot(history['train_acc'], label='Training Accuracy')
+        axs[0, 1].plot(history['val_acc'], label='Validation Accuracy')
+        axs[0, 1].set_title('Accuracy over Epochs', fontsize=15)
+        axs[0, 1].set_xlabel('Epoch', fontsize=12)
+        axs[0, 1].set_ylabel('Accuracy', fontsize=12)
+        axs[0, 1].legend()
+        axs[0, 1].grid(True)
+        
+        # Plot Precision and Recall
+        axs[1, 0].plot(history['train_prec'], label='Training Precision')
+        axs[1, 0].plot(history['val_prec'], label='Validation Precision')
+        axs[1, 0].plot(history['train_rec'], label='Training Recall')
+        axs[1, 0].plot(history['val_rec'], label='Validation Recall')
+        axs[1, 0].set_title('Precision and Recall over Epochs', fontsize=15)
+        axs[1, 0].set_xlabel('Epoch', fontsize=12)
+        axs[1, 0].set_ylabel('Score', fontsize=12)
+        axs[1, 0].legend()
+        axs[1, 0].grid(True)
+        
+        # Plot F1 Score
+        axs[1, 1].plot(history['train_f1'], label='Training F1')
+        axs[1, 1].plot(history['val_f1'], label='Validation F1')
+        axs[1, 1].set_title('F1 Score over Epochs', fontsize=15)
+        axs[1, 1].set_xlabel('Epoch', fontsize=12)
+        axs[1, 1].set_ylabel('F1 Score', fontsize=12)
+        axs[1, 1].legend()
+        axs[1, 1].grid(True)
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_path, 'training_history.png'), dpi=300)
+        plt.close()
+        
+    def test_model(self):
+        """Evaluate the model on the test set"""
+        test_loss, test_acc, test_prec, test_rec, test_f1 = self.evaluate(
+            self.test_dataloader, 
+            desc="Testing"
+        )
+
+        # Calculate ROC AUC
+        roc_auc = self.plot_roc_curve()
+
+        confusion_mat = self.plot_confusion_matrix(
+            class_names=['Benign', 'Malignant']
+        )
+        
+        print("\n----- Test Results -----")
+        print(f"Test Loss: {test_loss:.4f}")
+        print(f"Test Accuracy: {test_acc:.4f}")
+        print(f"Test Precision: {test_prec:.4f}")
+        print(f"Test Recall: {test_rec:.4f}")
+        print(f"Test F1 Score: {test_f1:.4f}")
+        
+        # Convert NumPy float32 to Python float
+        test_results = {
+            'test_loss': float(test_loss),
+            'test_accuracy': float(test_acc),
+            'test_precision': float(test_prec),
+            'test_recall': float(test_rec),
+            'test_f1': float(test_f1),
+            'roc_auc': float(roc_auc),
+            'confusion_matrix': {
+                'true_negatives': int(confusion_mat[0, 0]),
+                'false_positives': int(confusion_mat[0, 1]),
+                'false_negatives': int(confusion_mat[1, 0]),
+                'true_positives': int(confusion_mat[1, 1])
+            }
+        }
+
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_path = os.path.dirname(current_dir)
+        save_path =  os.path.join(project_path, "trained_model", "melanoma_classifier")
+        
+        os.makedirs(save_path, exist_ok=True)
+
+        # Save as JSON
+        import json
+        with open(os.path.join(save_path, "test_results.json"), 'w') as f:
+            json.dump(test_results, f, indent=4)
+            
+        return test_results
     
     def train(self):
         if self.model is None or self.optimizer is None:
@@ -206,26 +601,91 @@ class ModelTrainer:
             return
         
         print("Starting Training...")
+        
+        best_val_loss = float('inf')
+        best_model_state = None
+        last_model_state = None
 
+        history = {
+            'train_loss': [], 'val_loss': [],
+            'train_acc': [], 'val_acc': [],
+            'train_prec': [], 'val_prec': [],
+            'train_rec': [], 'val_rec': [],
+            'train_f1': [], 'val_f1': []
+        }
+        
         for epoch in range(self.start_epoch, self.start_epoch + self.epochs_to_train):
             print(f"\nEpoch {epoch}/{self.start_epoch + self.epochs_to_train - 1}")
 
-             # Training
+            # Training
             train_loss, train_acc, train_prec, train_rec, train_f1 = self.train_epoch()  
 
             # Validation
-            val_loss, val_acc, val_prec, val_rec, val_f1 = self.validate_epoch()  
+            val_loss, val_acc, val_prec, val_rec, val_f1 = self.validate_epoch() 
+
+            # Save metrics to history
+            history['train_loss'].append(train_loss)
+            history['val_loss'].append(val_loss)
+            history['train_acc'].append(train_acc)
+            history['val_acc'].append(val_acc)
+            history['train_prec'].append(train_prec)
+            history['val_prec'].append(val_prec)
+            history['train_rec'].append(train_rec)
+            history['val_rec'].append(val_rec)
+            history['train_f1'].append(train_f1)
+            history['val_f1'].append(val_f1) 
 
             print(f"Epoch {epoch} - Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
             print(f"Train Acc: {train_acc:.4f}, Prec: {train_prec:.4f}, Rec: {train_rec:.4f}, F1: {train_f1:.4f}")
             print(f"Val Acc: {val_acc:.4f}, Prec: {val_prec:.4f}, Rec: {val_rec:.4f}, F1: {val_f1:.4f}")
 
-            # Save the model at each epoch
+            # Prepare metrics
             train_metrics = (train_acc, train_prec, train_rec, train_f1)
             val_metrics = (val_acc, val_prec, val_rec, val_f1)
-            self.save_model(train_loss, val_loss, epoch, train_metrics, val_metrics, best=(val_loss < train_loss))
+            
+            # Create model state dictionary for the current epoch
+            current_model_state = self.create_model_state_dict(epoch, train_loss, val_loss, train_metrics, val_metrics)
+            
+            # Always save the last model state
+            last_model_state = current_model_state
+            
+            # Check if this is the best model based on validation loss
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_model_state = current_model_state
 
+        self.plot_training_history(history)
+
+        # Save path for models
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_path = os.path.dirname(os.path.dirname(current_dir))  
+        save_path = os.path.join(project_path, "Lumen_ML_project", "trained_model", "melanoma_classifier")
         
-        print("Finished training")
+        # Create directory if it doesn't exist
+        os.makedirs(save_path, exist_ok=True)
+        
+        # Save the last model
+        if last_model_state:
+            torch.save(last_model_state, os.path.join(save_path, "last-model.pth"))
+            print(f"\nLast model saved to {os.path.join(save_path, 'last-model.pth')}")
+        
+        # Save the best model
+        if best_model_state:
+            torch.save(best_model_state, os.path.join(save_path, "best-model.pth"))
+            print(f"Best model saved to {os.path.join(save_path, 'best-model.pth')}")
 
-    
+
+        print("Finished training")
+        
+        # Load the best model for evaluation
+        best_model_path = os.path.join(save_path, "best-model.pth")
+        if os.path.exists(best_model_path):
+            print(f"Loading best model from {best_model_path} for evaluation...")
+            best_model_state = torch.load(best_model_path)
+            self.model.load_state_dict(best_model_state['model_state'])
+        else:
+            print("Warning: Best model file not found. Evaluating the current model instead.")
+        
+        # After training is complete, evaluate on the test set
+        print("\nEvaluating model on test set...")
+        return self.test_model()

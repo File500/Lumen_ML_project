@@ -12,6 +12,10 @@ from tqdm import tqdm
 import joblib
 from concurrent.futures import ProcessPoolExecutor
 import multiprocessing
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, confusion_matrix
+import torch
 
 # Set global variables
 MONK_SKIN_TYPES = 10  # 10 levels from lightest (1) to darkest (10)
@@ -401,10 +405,7 @@ def train_prediction_model(features_df, output_folder):
     Returns:
         Trained model
     """
-    from sklearn.ensemble import RandomForestClassifier
-    from sklearn.model_selection import train_test_split
-    from sklearn.metrics import classification_report, confusion_matrix
-    import torch
+    
     
     print("Training prediction model...")
     
