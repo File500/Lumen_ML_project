@@ -136,7 +136,7 @@ class MelanomaGAN:
 
         # Define optimizers
         self.gen_optimizer = optimizers.Adam(learning_rate=0.0002, beta_1=0.5)
-        self.disc_optimizer = optimizers.Adam(learning_rate=0.0002, beta_1=0.5)
+        self.disc_optimizer = optimizers.Adam(learning_rate=0.0001, beta_1=0.5)
 
         # Metrics for tracking progress
         self.gen_loss_metric = tf.keras.metrics.Mean(name='gen_loss')
