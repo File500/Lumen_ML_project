@@ -65,6 +65,12 @@ def build_generator():
     model.add(layers.Conv2DTranspose(32, (5, 5), strides=(2, 2), padding='same', use_bias=False))
     model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
+    
+    # Upsample to 1000x1000
+    model.add(layers.Conv2DTranspose(32, (5, 5), strides=(2, 2), padding='same', use_bias=False))
+    model.add(layers.BatchNormalization())
+    model.add(layers.LeakyReLU())
+
 
     # Final output layer with tanh activation (pixels in [-1, 1])
     model.add(layers.Conv2D(3, (5, 5), padding='same', activation='tanh', use_bias=False))
@@ -81,7 +87,7 @@ def build_discriminator():
     model = models.Sequential()
 
     # Input 500x500x3 image
-    model.add(layers.Conv2D(16, (5, 5), strides=(2, 2), padding='same', input_shape=[500, 500, 3]))
+    model.add(layers.Conv2D(16, (5, 5), strides=(2, 2), padding='same', input_shape=[1000, 1000, 3]))
     model.add(layers.LeakyReLU())
     model.add(layers.Dropout(0.3))
 
@@ -126,7 +132,7 @@ class MelanomaGAN:
     def __init__(self, data_dir, batch_size=16):
         self.data_dir = data_dir
         self.batch_size = batch_size
-        self.img_size = (500, 500)  # Changed to 500x500
+        self.img_size = (1000, 1000)  # Changed to 500x500
         self.channels = 3
         self.noise_dim = 100
 
@@ -136,7 +142,7 @@ class MelanomaGAN:
 
         # Define optimizers
         self.gen_optimizer = optimizers.Adam(learning_rate=0.0002, beta_1=0.5)
-        self.disc_optimizer = optimizers.Adam(learning_rate=0.0001, beta_1=0.5)
+        self.disc_optimizer = optimizers.Adam(learning_rate=0.00001, beta_1=0.5)
 
         # Metrics for tracking progress
         self.gen_loss_metric = tf.keras.metrics.Mean(name='gen_loss')
