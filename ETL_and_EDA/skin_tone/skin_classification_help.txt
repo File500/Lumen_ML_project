@@ -1,8 +1,0 @@
-HOW TO use this folder
-
-monk_skin_color_clustering
-    classify images using K-means clustering 
-    when run u get new csv with new column skin type
-
-monk_pretrained_model
-    if some pretrained model is available you can use ran this script

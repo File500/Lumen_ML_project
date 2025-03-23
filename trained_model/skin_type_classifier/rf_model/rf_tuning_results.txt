@@ -1,0 +1,31 @@
+RANDOM FOREST HYPERPARAMETER TUNING RESULTS
+==========================================
+
+Best parameters:
+  n_estimators: 100
+  min_samples_split: 2
+  min_samples_leaf: 2
+  max_features: sqrt
+  max_depth: 10
+  criterion: entropy
+  bootstrap: True
+
+Best score (CV): 0.9590
+
+Validation set metrics:
+              precision    recall  f1-score   support
+
+           1       0.91      0.91      0.91        22
+           2       1.00      1.00      1.00        70
+           3       0.97      0.99      0.98        67
+           4       0.93      0.93      0.93        27
+           5       1.00      1.00      1.00        16
+           6       0.95      0.86      0.90        21
+           7       1.00      1.00      1.00        35
+           8       0.89      1.00      0.94        17
+           9       1.00      0.75      0.86         8
+          10       0.89      0.94      0.91        17
+
+    accuracy                           0.96       300
+   macro avg       0.95      0.94      0.94       300
+weighted avg       0.96      0.96      0.96       300

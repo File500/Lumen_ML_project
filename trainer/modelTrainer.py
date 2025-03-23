@@ -13,30 +13,60 @@ from tqdm import tqdm
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_curve, auc, confusion_matrix
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
+import time
+import collections
 
 
-class MelanomaDataset(Dataset):
-    def __init__(self, dataframe, img_dir, transform=None, binary_mode=True):
+class CachedMelanomaDataset(Dataset):
+    def __init__(self, dataframe, img_dir, transform=None, binary_mode=True, cache_images=True):
         """
         Args:
             dataframe (pandas.DataFrame): DataFrame containing image info and labels
             img_dir (string): Directory with all the images
             transform (callable, optional): Optional transform to be applied on a sample
             binary_mode (bool): Whether to use binary mode (single output) or multi-class mode
+            cache_images (bool): Whether to cache all images in memory
         """
         self.data_frame = dataframe
         self.img_dir = img_dir
         self.binary_mode = binary_mode
+        self.transform = transform if transform is not None else transforms.Compose([transforms.ToTensor()])
+        self.cache_images = cache_images
+        self.cache_size = 5000
+    
+        # Initialize LRU cache with OrderedDict instead of regular dict
+        self.cache = collections.OrderedDict() if cache_images else {}
         
-        if transform is None:
-            self.transform = transforms.Compose([
-                #transforms.Resize((224, 224)),
-                transforms.ToTensor(),
-                #transforms.Normalize(mean=[0.485, 0.456, 0.406], 
-                #                     std=[0.229, 0.224, 0.225])
-            ])
-        else:
-            self.transform = transform
+        # No pre-loading, images will be cached on-demand
+        if cache_images:
+            print(f"Using LRU cache with maximum size of {5000} images")
+        
+        # Initialize cache
+        #self.cache = {}
+        '''
+        # Pre-load all images into memory if caching is enabled
+        if cache_images:
+            print(f"Caching {len(dataframe)} images in memory...")
+            for idx in tqdm(range(len(dataframe))):
+                img_name = dataframe.iloc[idx, 0]
+                
+                # Check if extension is missing and add .jpg if needed
+                if not img_name.lower().endswith(('.jpg', '.jpeg', '.png')):
+                    img_name = img_name + '.jpg'
+                
+                # Create full path
+                img_path = os.path.join(img_dir, img_name)
+                
+                # Load image
+                try:
+                    image = Image.open(img_path).convert('RGB')
+                    # Store the untransformed image (transforms will be applied on-the-fly)
+                    self.cache[idx] = image
+                except FileNotFoundError:
+                    print(f"Warning: Image not found at {img_path}")
+            
+            print(f"Successfully cached {len(self.cache)} images")
+        '''            
             
     def __len__(self):
         return len(self.data_frame)
@@ -44,23 +74,37 @@ class MelanomaDataset(Dataset):
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
             idx = idx.tolist()
-            
-        img_name = self.data_frame.iloc[idx, 0]
-
-        # Check if extension is missing and add .jpg if needed
-        if not img_name.lower().endswith(('.jpg', '.jpeg', '.png')):
-            img_name = img_name + '.jpg'
         
-        # Create full path
-        img_path = os.path.join(self.img_dir, img_name)
-
-        # Try to open the image
-        try:
-            image = Image.open(img_path).convert('RGB')
-        except FileNotFoundError:
-            print(f"Warning: Image not found at {img_path}")
-            # Provide a fallback or raise a more informative error
-            raise FileNotFoundError(f"Could not find image: {img_path}")
+        # Get image from cache if available
+        if self.cache_images and idx in self.cache:
+            # Move this item to the end (most recently used)
+            image = self.cache.pop(idx)
+            self.cache[idx] = image
+        else:
+            # Load image from disk
+            img_name = self.data_frame.iloc[idx, 0]
+            
+            # Check if extension is missing and add .jpg if needed
+            if not img_name.lower().endswith(('.jpg', '.jpeg', '.png')):
+                img_name = img_name + '.jpg'
+            
+            # Create full path
+            img_path = os.path.join(self.img_dir, img_name)
+            
+            # Try to open the image
+            try:
+                image = Image.open(img_path).convert('RGB')
+                
+                # Add to cache if caching is enabled
+                if self.cache_images:
+                    # If cache is full, remove the oldest item (first in OrderedDict)
+                    if len(self.cache) >= self.cache_size:
+                        self.cache.popitem(last=False)
+                    # Add current item to the end (most recently used)
+                    self.cache[idx] = image
+                    
+            except FileNotFoundError:
+                raise FileNotFoundError(f"Could not find image: {img_path}")
         
         # Get the target label (0 for benign, 1 for malignant)
         target = self.data_frame.iloc[idx, 8]  # Assuming 'target' is at column 8
@@ -72,6 +116,7 @@ class MelanomaDataset(Dataset):
             # For CrossEntropyLoss - class index (no one-hot encoding needed)
             target = torch.tensor(target, dtype=torch.long)
         
+        # Apply transforms (transforms are applied on-the-fly to allow for data augmentation)
         if self.transform:
             image = self.transform(image)
             
@@ -97,7 +142,14 @@ def load_model(model_path, model, optimizer):
 
 
 def create_data_loader(data, batch_size, num_workers, shuffle):
-    dataloader = DataLoader(data, batch_size=batch_size, num_workers=num_workers, shuffle=shuffle, pin_memory=True)
+    dataloader = DataLoader(data, 
+                            batch_size=batch_size, 
+                            num_workers=num_workers, 
+                            shuffle=shuffle, 
+                            pin_memory=True, 
+                            persistent_workers=True,
+                            prefetch_factor=2
+                        )
     return dataloader
 
 
@@ -185,9 +237,29 @@ class ModelTrainer:
         ])
 
         # Create datasets
-        train_dataset = MelanomaDataset(dataframe=train_df, img_dir=img_dir, transform=train_transform, binary_mode=self.binary_mode)
-        val_dataset = MelanomaDataset(dataframe=val_df, img_dir=img_dir, transform=eval_transform, binary_mode=self.binary_mode)
-        test_dataset = MelanomaDataset(dataframe=test_df, img_dir=img_dir, transform=eval_transform, binary_mode=self.binary_mode)
+        train_dataset = CachedMelanomaDataset(
+            dataframe=train_df, 
+            img_dir=img_dir, 
+            transform=train_transform, 
+            binary_mode=self.binary_mode,
+            cache_images=True
+        )
+
+        val_dataset = CachedMelanomaDataset(
+            dataframe=val_df, 
+            img_dir=img_dir, 
+            transform=eval_transform, 
+            binary_mode=self.binary_mode,
+            cache_images=True
+        )
+
+        test_dataset = CachedMelanomaDataset(
+            dataframe=test_df, 
+            img_dir=img_dir, 
+            transform=eval_transform, 
+            binary_mode=self.binary_mode,
+            cache_images=True
+        )
         
         # Create data loaders
         self.training_dataloader = create_data_loader(train_dataset, training_batch_size, num_workers, shuffle)
@@ -617,11 +689,17 @@ class ModelTrainer:
         for epoch in range(self.start_epoch, self.start_epoch + self.epochs_to_train):
             print(f"\nEpoch {epoch}/{self.start_epoch + self.epochs_to_train - 1}")
 
-            # Training
-            train_loss, train_acc, train_prec, train_rec, train_f1 = self.train_epoch()  
-
-            # Validation
-            val_loss, val_acc, val_prec, val_rec, val_f1 = self.validate_epoch() 
+            # Measure training time
+            train_start = time.time()
+            train_loss, train_acc, train_prec, train_rec, train_f1 = self.train_epoch()
+            train_end = time.time()
+            print(f"Training time: {train_end - train_start:.2f} seconds")
+            
+            # Measure validation time
+            val_start = time.time()
+            val_loss, val_acc, val_prec, val_rec, val_f1 = self.validate_epoch()
+            val_end = time.time()
+            print(f"Validation time: {val_end - val_start:.2f} seconds") 
 
             # Save metrics to history
             history['train_loss'].append(train_loss)
@@ -635,16 +713,22 @@ class ModelTrainer:
             history['train_f1'].append(train_f1)
             history['val_f1'].append(val_f1) 
 
+            metrics_start = time.time()
             print(f"Epoch {epoch} - Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
             print(f"Train Acc: {train_acc:.4f}, Prec: {train_prec:.4f}, Rec: {train_rec:.4f}, F1: {train_f1:.4f}")
             print(f"Val Acc: {val_acc:.4f}, Prec: {val_prec:.4f}, Rec: {val_rec:.4f}, F1: {val_f1:.4f}")
+            metrics_end = time.time()
+            print(f"metrics time: {metrics_end - metrics_start:.2f} seconds") 
 
             # Prepare metrics
             train_metrics = (train_acc, train_prec, train_rec, train_f1)
             val_metrics = (val_acc, val_prec, val_rec, val_f1)
             
             # Create model state dictionary for the current epoch
+            model_state_start = time.time()
             current_model_state = self.create_model_state_dict(epoch, train_loss, val_loss, train_metrics, val_metrics)
+            model_state_end = time.time()
+            print(f"metrics time: {model_state_end - model_state_start:.2f} seconds") 
             
             # Always save the last model state
             last_model_state = current_model_state
