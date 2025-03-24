@@ -139,6 +139,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+gambit_env
 
 # Spyder project settings
 .spyderproject
