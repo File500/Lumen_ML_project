@@ -14,6 +14,7 @@ from PIL import Image
 import imagehash
 from math import sqrt
 import copy
+from tqdm import tqdm
 
 import cv2
 from skimage.metrics import structural_similarity as ssim
@@ -76,21 +77,21 @@ def evaluate_skin_condition_similarity(image1_path, image2_path):
     result = compare_patient_skin_images(image1_path, image2_path)
 
     # Significantly stricter thresholds for standardized 224x224 images
-    phash_threshold = 18
-    ahash_threshold = 10
-    whash_threshold = 8
-    hist_threshold = 200
-    combined_threshold = 8
-    ssim_threshold = 0.25
+    phash_threshold = 3
+    ahash_threshold = 2
+    whash_threshold = 2
+    hist_threshold = 50
+    combined_threshold = 2
+    ssim_threshold = 0.98
 
     # Print detailed results
-    print(f"Perceptual hash difference: {result['perceptual_hash_diff']}")
-    print(f"Average hash difference: {result['average_hash_diff']}")
-    print(f"Wavelet hash difference: {result['wavelet_hash_diff']}")
-    print(f"Histogram difference: {result['histogram_diff']}")
-    print(f"Combined hash score: {result['combined_hash_score']}")
-    if result['ssim_diff'] is not None:
-        print(f"SSIM difference: {result['ssim_diff']}")
+    # print(f"Perceptual hash difference: {result['perceptual_hash_diff']}")
+    # print(f"Average hash difference: {result['average_hash_diff']}")
+    # print(f"Wavelet hash difference: {result['wavelet_hash_diff']}")
+    # print(f"Histogram difference: {result['histogram_diff']}")
+    # print(f"Combined hash score: {result['combined_hash_score']}")
+    # if result['ssim_diff'] is not None:
+    #     print(f"SSIM difference: {result['ssim_diff']}")
 
     # Stricter assessment criteria with multiple conditions that must be satisfied
     if ((result['combined_hash_score'] < combined_threshold) and
@@ -99,10 +100,10 @@ def evaluate_skin_condition_similarity(image1_path, image2_path):
             (result['wavelet_hash_diff'] < whash_threshold) and
             (result['histogram_diff'] < hist_threshold) and
             (result['ssim_diff'] is None or result['ssim_diff'] < ssim_threshold)):
-        print("Assessment: Images show similar skin condition")
+        # print("Assessment: Images show similar skin condition")
         return True
     else:
-        print("Assessment: Images likely show different or changed skin condition")
+        # print("Assessment: Images likely show different or changed skin condition")
         return False
 
 duplicates_df = pd.read_csv('../data/ISIC_2020_Training_Duplicates.csv')
@@ -126,7 +127,7 @@ path = '../../train_224X224/'
 new_rows = []
 
 for id in unique_ids:
-
+    print(f'Processing patient {id} -- {unique_ids.index(id)}/{len(unique_ids)}')
     patient_images = (metadata_df.where(metadata_df['patient_id'] == id)
                       .dropna(axis=0)
                       .reset_index()['image_name']
@@ -134,7 +135,7 @@ for id in unique_ids:
 
     patient_images_copy = copy.deepcopy(patient_images)
 
-    for image1 in patient_images:
+    for image1 in tqdm(patient_images):
 
         image_1_path = path + image1 + '.jpg'
         file1 = Path(image_1_path)

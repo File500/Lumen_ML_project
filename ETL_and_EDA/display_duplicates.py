@@ -7,7 +7,7 @@ import io
 
 # Configuration
 csv_path = './etl_data/new_training_duplicates.csv'
-image_dir = '../data/train_224x224/'
+image_dir = '../../train_224x224/'
 output_html = 'image_pairs_viewer.html'
 limit = 200  # Number of image pairs to display
 
