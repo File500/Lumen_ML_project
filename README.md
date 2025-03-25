@@ -1,33 +1,33 @@
 # Lumen_ML_project
 
-Create
+## Create virtual env:
 ```shell
 python -m venv gambit_env
 ```
 ----
-Powershell activation
+## Powershell activation
 ```shell
 gambit_env\Scripts\Activate.ps1
 ```
-cmd activation
+## CMD activation
 ```shell
-gambit_env\Scripts\activate.bat
+gambit_env\Scripts\activate
 ```
-Linux terminal activation
+## Linux terminal activation
 ```shell
 source gambit_env/bin/activate
 ```
 ---
-Deactivate
-```shell
-deactivate
-```
----
-When inside virtual env
+## When inside virtual env:
 ```bash
 pip install -r requirements.txt
 ```
 ```bash
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+---
+## Deactivate when done:
+```shell
+deactivate
 ```
 
