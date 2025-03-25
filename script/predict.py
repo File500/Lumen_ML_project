@@ -140,10 +140,8 @@ def analyse_folder_data(jpg_files, test_data) -> pd.DataFrame:
 
             image_metadata = test_data.loc[test_data.image == jpg_file.stem]
 
-            transform = transforms.Compose([transforms.Resize(resize_size),
-                                            transforms.ToTensor(),
-                                            # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-                                            ])
+            transform = transforms.Compose([transforms.ToTensor()])
+            # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
             composed_image_tensor = transform(cleaned_image).unsqueeze(0).to(device)
 
