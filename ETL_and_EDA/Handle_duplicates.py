@@ -137,8 +137,8 @@ if __name__ == "__main__":
         output_path="combined_unique_pairs.csv"
     )
 
-    move_images_with_metadata('../data/train_224x224',
-               '../../Lumen_Image_Data/deduplicated_train_224x224', #to be created
+    move_images_with_metadata('../../Lumen_Image_Data/train',
+               '../../Lumen_Image_Data/deduplicated_train', #to be created
                './combined_unique_pairs.csv',
                '../data/ISIC_2020_Training_GroundTruth_v2.csv',
                '../data/deduplicated_metadata.csv') #to be created

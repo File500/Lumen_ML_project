@@ -148,8 +148,8 @@ if __name__ == "__main__":
     # test_folder_path = "./test_folder/"
     # test_output_folder_path = "./test_output_folder/"
 
-    input_folder = '../../Lumen_Image_Data/train/'
-    output_folder = '../../train_224X224_processed/'
+    input_folder = '../../Lumen_Image_Data/deduplicated_train/'
+    output_folder = '../../Lumen_Image_Data/train_224X224_processed/'
 
     # Resize images
     resize_images(input_folder, output_folder)
