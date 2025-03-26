@@ -138,7 +138,7 @@ if __name__ == "__main__":
     )
 
     move_images_with_metadata('../data/train_224x224',
-               '../data/deduplicated_train_224x224', #to be created
+               '../../Lumen_Image_Data/deduplicated_train_224x224', #to be created
                './combined_unique_pairs.csv',
                '../data/ISIC_2020_Training_GroundTruth_v2.csv',
                '../data/deduplicated_metadata.csv') #to be created
