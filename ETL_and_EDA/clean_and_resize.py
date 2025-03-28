@@ -9,6 +9,7 @@ from torchvision.utils import save_image
 import numpy as np
 from PIL import Image
 from tqdm import tqdm
+from pathlib import Path
 
 # Check if CUDA is available
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -234,6 +235,9 @@ def batch_process_torch(folder_path, output_folder=None, target_size=(224, 224),
         if batch_imgs:
             # Process each image in the batch
             for i, (img, output_path) in enumerate(zip(batch_imgs, batch_paths)):
+                if os.path.isfile(output_path):
+                    skipped += 1
+                    continue
                 try:
                     # Clean and resize
                     cleaned_img = mask_dark_pixels_torch(img, threshold=70)
