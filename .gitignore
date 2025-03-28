@@ -35,6 +35,14 @@ MANIFEST
 #data
 /data/ISIC_2020_Training_JPEG/train/*.jpg
 /data/train_224X224/*.jpg
+/data/train_300X300/*.jpg
+/data/train_456X456/*.jpg
+/data/masked_images/binary/*.jpg
+/data/masked_224X224/binary/*.jpg
+/data/masked_300X300/binary/*.jpg
+/data/masked_456X456/binary/*.jpg
+/trained_model/skin_type_classifier
+/trainer/test.py
 
 # Installer logs
 pip-log.txt

@@ -7,7 +7,7 @@ class PretrainedMelanomaClassifier(nn.Module):
         super(PretrainedMelanomaClassifier, self).__init__()
         
         # Load EfficientNet-B0 with pretrained weights
-        self.efficientnet = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT)
+        self.efficientnet = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1)
         
         # For binary classification with BCEWithLogitsLoss, use 1 output
         # For multi-class classification with CrossEntropyLoss, use num_classes outputs
