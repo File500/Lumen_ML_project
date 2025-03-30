@@ -100,14 +100,14 @@ def mask_dark_pixels_torch(img, threshold=30, inpaint_radius=25):
     blur_large = TF.gaussian_blur(img_tensor, kernel_size=[15, 15], sigma=[8.0, 8.0])
 
     # Blend original with increasingly blurred versions based on mask and distance
-    inpainted = img_tensor * (1 - mask_3d) + blur_small * mask_3d
+    inpainted = img_tensor * (1 - mask_3d) + blur_medium * mask_3d
 
     # Convert back to PIL
     result = TF.to_pil_image(inpainted.cpu())
     return result
 
 
-def resize_images_torch(folder_path, output_folder=None, target_size=(224, 224)):
+def resize_images_torch(folder_path, output_folder=None, target_size=(456, 456)):
     """
     Resize and clean images using PyTorch with GPU acceleration
 
@@ -184,7 +184,7 @@ def resize_images_torch(folder_path, output_folder=None, target_size=(224, 224))
     print(f"Skipped {skipped} files")
 
 
-def batch_process_torch(folder_path, output_folder=None, target_size=(224, 224), batch_size=16):
+def batch_process_torch(folder_path, output_folder=None, target_size=(456, 456), batch_size=16):
     """
     Process images in batches for better GPU utilization
 
@@ -287,7 +287,7 @@ if __name__ == "__main__":
     else:
         # Default paths
         input_folder = '../../Lumen_Image_Data/deduplicated_train/'
-        output_folder = '../../Lumen_Image_Data/train_224X224_processed/'
+        output_folder = '../../Lumen_Image_Data/train_456X456_processed/'
 
     # Print CUDA information
     if torch.cuda.is_available():

@@ -266,8 +266,8 @@ class MelanomaGAN:
         self.discriminator.apply(self._weights_init)
 
         # Define optimizers
-        self.gen_optimizer = optim.Adam(self.generator.parameters(), lr=0.0002, betas=(0.5, 0.999))
-        self.disc_optimizer = optim.Adam(self.discriminator.parameters(), lr=0.0002, betas=(0.5, 0.999))
+        self.gen_optimizer = optim.Adam(self.generator.parameters(), lr=0.0001, betas=(0.5, 0.999))
+        self.disc_optimizer = optim.Adam(self.discriminator.parameters(), lr=0.0001, betas=(0.5, 0.999))
 
         # Define loss functions
         self.adversarial_loss = nn.BCEWithLogitsLoss()
@@ -584,7 +584,7 @@ def main():
                         help='Mode: train the model or generate synthetic images')
     parser.add_argument('--epochs', type=int, default=200,
                         help='Number of epochs to train (for train mode)')
-    parser.add_argument('--batch_size', type=int, default=32,
+    parser.add_argument('--batch_size', type=int, default=20,
                         help='Batch size for training')
     parser.add_argument('--img_size', type=int, default=512,
                         help='Size to resize images (square)')
@@ -594,7 +594,7 @@ def main():
                         help='Directory to save generated images')
     parser.add_argument('--load_model', type=str, default=None,
                         help='Path to pre-trained generator model to load (for generate mode)')
-    parser.add_argument('--accumulation_steps', type=int, default=2,
+    parser.add_argument('--accumulation_steps', type=int, default=4,
                         help='Number of steps for gradient accumulation')
 
     args = parser.parse_args()
