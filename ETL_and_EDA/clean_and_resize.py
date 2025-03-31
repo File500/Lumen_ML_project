@@ -107,7 +107,7 @@ def mask_dark_pixels_torch(img, threshold=30, inpaint_radius=25):
     return result
 
 
-def resize_images_torch(folder_path, output_folder=None, target_size=(456, 456)):
+def resize_images_torch(folder_path, output_folder=None, target_size=(300, 300)):
     """
     Resize and clean images using PyTorch with GPU acceleration
 
@@ -184,7 +184,7 @@ def resize_images_torch(folder_path, output_folder=None, target_size=(456, 456))
     print(f"Skipped {skipped} files")
 
 
-def batch_process_torch(folder_path, output_folder=None, target_size=(456, 456), batch_size=16):
+def batch_process_torch(folder_path, output_folder=None, target_size=(300, 300), batch_size=16):
     """
     Process images in batches for better GPU utilization
 
@@ -287,7 +287,7 @@ if __name__ == "__main__":
     else:
         # Default paths
         input_folder = '../../Lumen_Image_Data/deduplicated_train/'
-        output_folder = '../../Lumen_Image_Data/train_456X456_processed/'
+        output_folder = '../../Lumen_Image_Data/train_300X300_processed/'
 
     # Print CUDA information
     if torch.cuda.is_available():
