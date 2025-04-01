@@ -7,7 +7,7 @@ import torch
 import torch.optim as optim
 import torch.nn as nn
 import torchvision.transforms as transforms
-from torch.utils.data import DataLoader, Dataset, random_split
+from torch.utils.data import DataLoader, Dataset, random_split, WeightedRandomSampler
 from PIL import Image
 from tqdm import tqdm
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_curve, auc, confusion_matrix
@@ -141,11 +141,38 @@ def load_model(model_path, model, optimizer):
     return model, optimizer, model_epoch
 
 
-def create_data_loader(data, batch_size, num_workers, shuffle):
+def create_balanced_sampler(dataset, target_class, target_ratio):
+    # Get all labels from the dataset
+    if hasattr(dataset, 'target'):
+        labels = dataset.target
+    else:
+        return None
+
+    # Calculate class counts
+    class_count = np.bincount(labels)
+    total_samples = len(labels)
+
+    # Calculate the number of samples needed for target class to achieve desired ratio
+    target_samples = int(total_samples * target_ratio)
+    current_target_samples = class_count[target_class]
+
+    # Calculate weights for each sample
+    weights = np.ones_like(labels, dtype=np.float64)
+
+    # Calculate the weight adjustment needed for the target class
+    if current_target_samples < target_samples:
+        weights[labels == target_class] = target_samples / current_target_samples
+
+    # Create and return the sampler
+    return WeightedRandomSampler(weights, num_samples=total_samples, replacement=True)
+
+
+def create_data_loader(data, batch_size, num_workers, sampler=None):
+
     dataloader = DataLoader(data, 
                             batch_size=batch_size, 
                             num_workers=num_workers, 
-                            shuffle=shuffle, 
+                            sampler=sampler,
                             pin_memory=True, 
                             persistent_workers=True,
                             prefetch_factor=2
@@ -220,20 +247,28 @@ class ModelTrainer:
         
         # Data augmentation for training
         train_transform = transforms.Compose([
-            #transforms.Resize((224, 224)),
-            #transforms.RandomHorizontalFlip(),
-            #transforms.RandomVerticalFlip(),
-            #transforms.RandomRotation(20),
-            #transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.05),
+            # not needed now (already using scaled Dset)
+            # transforms.Resize((224, 224)),
+
+            # Random transforms with individual probabilities
+            transforms.RandomApply([transforms.RandomRotation(15)], p=0.5),
+            transforms.RandomApply([transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2)], p=0.6),
+            transforms.RandomApply([transforms.GaussianBlur(kernel_size=(5, 5), sigma=(0.1, 2.0))], p=0.3),
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.RandomVerticalFlip(p=0.2),
+            transforms.RandomApply([transforms.RandomAffine(degrees=0, translate=(0.1, 0.1))], p=0.4),
+            transforms.RandomApply([transforms.RandomPerspective(distortion_scale=0.2)], p=0.3),
+
+            # Always convert to tensor and normalize at the end
             transforms.ToTensor(),
-            #transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # ImageNet stats
         ])
 
         # For validation and test (no augmentation)
         eval_transform = transforms.Compose([
             #transforms.Resize((224, 224)),
             transforms.ToTensor(),
-            #transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
 
         # Create datasets
@@ -260,11 +295,14 @@ class ModelTrainer:
             binary_mode=self.binary_mode,
             cache_images=True
         )
+
+        # used for oversampling class 1 10% / 90% class 0
+        sampler = create_balanced_sampler(train_dataset, target_class=1, target_ratio=0.1)
         
         # Create data loaders
-        self.training_dataloader = create_data_loader(train_dataset, training_batch_size, num_workers, shuffle)
-        self.validation_dataloader = create_data_loader(val_dataset, training_batch_size, num_workers, False)
-        self.test_dataloader = create_data_loader(test_dataset, training_batch_size, num_workers, False)
+        self.training_dataloader = create_data_loader(train_dataset, training_batch_size, num_workers, sampler)
+        self.validation_dataloader = create_data_loader(val_dataset, training_batch_size, num_workers)
+        self.test_dataloader = create_data_loader(test_dataset, training_batch_size, num_workers)
 
         self.loss_fn = loss_fn if loss_fn is not None else nn.BCEWithLogitsLoss()
         self.epochs_to_train = epochs_to_train
