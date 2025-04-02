@@ -16,10 +16,10 @@ def train():
     config_file_path = os.path.join(project_path, "config.json")
     dataset_path = os.path.join(project_path, "data")
     # dataset_training_files = os.path.join(dataset_path, "train_224X224_processed")
-    # dataset_training_metadata = os.path.join(dataset_path, "deduplicated_metadata.csv")
+    dataset_training_metadata = os.path.join(dataset_path, "deduplicated_metadata.csv")
 
     dataset_training_files = "../../Lumen_Image_Data/train_224X224_processed"
-    dataset_training_metadata = "../../Lumen_Image_Data/deduplicated_metadata.csv"
+    # dataset_training_metadata = "../../Lumen_Image_Data/deduplicated_metadata.csv"
     
     # Load configuration
     with open(config_file_path, "r") as config_file:
