@@ -253,22 +253,21 @@ class ModelTrainer:
             # Random transforms with individual probabilities
             transforms.RandomApply([transforms.RandomRotation(15)], p=0.5),
             transforms.RandomApply([transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2)], p=0.6),
-            transforms.RandomApply([transforms.GaussianBlur(kernel_size=(5, 5), sigma=(0.1, 2.0))], p=0.3),
+            transforms.RandomApply([transforms.GaussianBlur(kernel_size=(5, 5), sigma=(0.1, 2.0))], p=0.2),
             transforms.RandomHorizontalFlip(p=0.5),
             transforms.RandomVerticalFlip(p=0.2),
             transforms.RandomApply([transforms.RandomAffine(degrees=0, translate=(0.1, 0.1))], p=0.4),
             transforms.RandomApply([transforms.RandomPerspective(distortion_scale=0.2)], p=0.3),
 
-            # Always convert to tensor and normalize at the end
             transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # ImageNet stats
+            # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # efficientnet already normalizes the input
         ])
 
         # For validation and test (no augmentation)
         eval_transform = transforms.Compose([
-            #transforms.Resize((224, 224)),
+            #transforms.Resize((224, 224)), #not needed since we already have scaled images
             transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]) # efficientnet already normalizes the input
         ])
 
         # Create datasets
