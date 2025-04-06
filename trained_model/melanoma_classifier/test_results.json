@@ -1,14 +1,14 @@
 {
-    "test_loss": 0.8964821696281433,
-    "test_accuracy": 0.7398042414355628,
-    "test_precision": 0.05334335086401202,
-    "test_recall": 0.8160919540229885,
-    "test_f1": 0.1001410437235543,
-    "roc_auc": 0.8635746482166847,
+    "test_loss": 0.9102985262870789,
+    "test_accuracy": 0.7206362153344209,
+    "test_precision": 0.052337752965806,
+    "test_recall": 0.8620689655172413,
+    "test_f1": 0.09868421052631579,
+    "roc_auc": 0.8726087444133445,
     "confusion_matrix": {
-        "true_negatives": 3557,
-        "false_positives": 1260,
-        "false_negatives": 16,
-        "true_positives": 71
+        "true_negatives": 3459,
+        "false_positives": 1358,
+        "false_negatives": 12,
+        "true_positives": 75
     }
 }

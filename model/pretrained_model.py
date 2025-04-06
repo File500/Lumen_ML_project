@@ -7,7 +7,7 @@ class PretrainedMelanomaClassifier(nn.Module):
         super(PretrainedMelanomaClassifier, self).__init__()
         
         # Load EfficientNet-B0 with pretrained weights
-        self.efficientnet = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1)
+        self.efficientnet = models.efficientnet_b3(weights=models.EfficientNet_B3_Weights.IMAGENET1K_V1)
         
         # For binary classification with BCEWithLogitsLoss, use 1 output
         # For multi-class classification with CrossEntropyLoss, use num_classes outputs
@@ -16,7 +16,7 @@ class PretrainedMelanomaClassifier(nn.Module):
         # Modify the classifier to fit the number of classes
         self.efficientnet.classifier = nn.Sequential(
             nn.Dropout(0.2),
-            nn.Linear(1280, output_dim)
+            nn.Linear(1536, output_dim) #1280 for b0 model
         )
         
         self.binary_mode = binary_mode
