@@ -9,6 +9,27 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from model.pretrained_model import PretrainedMelanomaClassifier
 from modelTrainer import ModelTrainer
 
+
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=0.75, gamma=1, reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha  # controls class imbalance
+        self.gamma = gamma  # focuses on hard examples
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        BCE_loss = nn.functional.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
+        pt = torch.exp(-BCE_loss)
+
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * BCE_loss
+
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
+
 def train():
     # Keep existing paths
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -50,9 +71,13 @@ def train():
             
             if malignant_count > 0:
                 # Calculate positive class weight (higher weight for minority class)
-                pos_weight = torch.tensor([benign_count / malignant_count])
-                print(f"Using weighted loss function - positive class weight: {pos_weight.item():.2f}")
-                loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight.to(device))
+                # TODO: remove this commented code if focal loss is better
+                # pos_weight = torch.tensor([benign_count / malignant_count])
+                # print(f"Using weighted loss function - positive class weight: {pos_weight.item():.2f}")
+                # loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight.to(device))
+
+                print(f"Malignant count: {malignant_count} --> using focal loss")
+                loss_fn = FocalLoss(alpha=0.75, gamma=1, reduction="mean")
             else:
                 print("WARNING: No malignant samples found in dataset, using unweighted loss")
                 loss_fn = nn.BCEWithLogitsLoss()
@@ -83,3 +108,4 @@ def train():
    
 if __name__ == "__main__":
     train()
+
