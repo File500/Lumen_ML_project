@@ -42,6 +42,7 @@ MANIFEST
 /data/masked_300X300/binary/*.jpg
 /data/masked_456X456/binary/*.jpg
 /trained_model/skin_type_classifier
+/trained_model/melanoma_classifier/*.pth
 /trainer/test.py
 
 # Installer logs
