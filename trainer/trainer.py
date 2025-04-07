@@ -11,14 +11,15 @@ from modelTrainer import ModelTrainer
 
 
 class FocalLoss(nn.Module):
-    def __init__(self, alpha=0.75, gamma=1, reduction='mean'):
+    def __init__(self, alpha=0.75, gamma=1, reduction='mean', pos_weight=None):
         super(FocalLoss, self).__init__()
         self.alpha = alpha  # controls class imbalance
         self.gamma = gamma  # focuses on hard examples
         self.reduction = reduction
+        self.pos_weight = pos_weight 
 
     def forward(self, inputs, targets):
-        BCE_loss = nn.functional.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
+        BCE_loss = nn.functional.binary_cross_entropy_with_logits(inputs, targets, reduction='none', pos_weight=self.pos_weight)
         pt = torch.exp(-BCE_loss)
 
         focal_loss = self.alpha * (1 - pt) ** self.gamma * BCE_loss
@@ -72,12 +73,12 @@ def train():
             if malignant_count > 0:
                 # Calculate positive class weight (higher weight for minority class)
                 # TODO: remove this commented code if focal loss is better
-                # pos_weight = torch.tensor([benign_count / malignant_count])
-                # print(f"Using weighted loss function - positive class weight: {pos_weight.item():.2f}")
                 # loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight.to(device))
-
+                pos_weight = torch.tensor([benign_count / malignant_count])
+                print(f"Ppositive class weight: {pos_weight.item():.2f}")
                 print(f"Malignant count: {malignant_count} --> using focal loss")
-                loss_fn = FocalLoss(alpha=0.75, gamma=1, reduction="mean")
+                pos_weight=pos_weight.to(device)
+                loss_fn = FocalLoss(alpha=0.85, gamma=3, reduction="mean", pos_weight=pos_weight)
             else:
                 print("WARNING: No malignant samples found in dataset, using unweighted loss")
                 loss_fn = nn.BCEWithLogitsLoss()
