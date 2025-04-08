@@ -78,7 +78,7 @@ def train():
                 print(f"Ppositive class weight: {pos_weight.item():.2f}")
                 print(f"Malignant count: {malignant_count} --> using focal loss")
                 pos_weight=pos_weight.to(device)
-                loss_fn = FocalLoss(alpha=0.85, gamma=3, reduction="mean", pos_weight=pos_weight)
+                loss_fn = FocalLoss(alpha=0.95, gamma=2, reduction="mean", pos_weight=pos_weight)
             else:
                 print("WARNING: No malignant samples found in dataset, using unweighted loss")
                 loss_fn = nn.BCEWithLogitsLoss()
