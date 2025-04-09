@@ -2,7 +2,7 @@
     "RESIZE_WIDTH": 300,
     "RESIZE_HIGHT": 300,
     "TRAINING_BATCH_SIZE": 32,
-    "EPOCHS_TO_TRAIN": 30,
+    "EPOCHS_TO_TRAIN": 40,
     "NUM_WORKERS": 8,
     "SHUFFLE": true,
     "LEARNING_RATE": 1e-6,

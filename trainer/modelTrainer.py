@@ -15,6 +15,7 @@ from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 import time
 import collections
+import random
 
 
 class CachedMelanomaDataset(Dataset):
@@ -33,7 +34,7 @@ class CachedMelanomaDataset(Dataset):
         self.transform = transform if transform is not None else transforms.Compose([transforms.ToTensor()])
         self.cache_images = cache_images
         self.cache_size = 5000
-    
+        
         # Initialize LRU cache with OrderedDict instead of regular dict
         self.cache = collections.OrderedDict() if cache_images else {}
         
@@ -107,7 +108,8 @@ class CachedMelanomaDataset(Dataset):
                 raise FileNotFoundError(f"Could not find image: {img_path}")
         
         # Get the target label (0 for benign, 1 for malignant)
-        target = self.data_frame.iloc[idx, 8]  # Assuming 'target' is at column 8
+        target = self.data_frame.iloc[idx, 8]# Assuming 'target' is at column 8
+        transform_type = self.data_frame.iloc[idx, 8]
         
         if self.binary_mode:
             # For BCEWithLogitsLoss - single output with value 0 or 1
@@ -117,7 +119,9 @@ class CachedMelanomaDataset(Dataset):
             target = torch.tensor(target, dtype=torch.long)
         
         # Apply transforms (transforms are applied on-the-fly to allow for data augmentation)
-        if self.transform:
+        if isinstance(self.transform, list):
+            image = self.transform[transform_type](image)
+        else:
             image = self.transform(image)
             
         return image, target
@@ -179,6 +183,17 @@ def create_data_loader(data, batch_size, num_workers, sampler=None):
                         )
     return dataloader
 
+
+def get_random_transform():
+    
+    possible_transforms = [
+            transforms.RandomRotation(15),
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+            transforms.RandomHorizontalFlip(p=1.0),
+            transforms.RandomVerticalFlip(p=1.0),
+    ]
+    
+    return random.choice(possible_transforms)
 
 def get_device():
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -246,11 +261,10 @@ class ModelTrainer:
         print(f"  Test samples: {len(test_df)}")
         
         # Data augmentation for training
-        train_transform = transforms.Compose([
-            # not needed now (already using scaled Dset)
-            # transforms.Resize((224, 224)),
+        # transforms.Resize((224, 224)),
+        # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        train_transform_minor = transforms.Compose([
 
-            # Random transforms with individual probabilities
             transforms.RandomApply([transforms.RandomRotation(15)], p=0.5),
             transforms.RandomApply([transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2)], p=0.6),
             transforms.RandomApply([transforms.GaussianBlur(kernel_size=(5, 5), sigma=(0.1, 2.0))], p=0.2),
@@ -259,15 +273,19 @@ class ModelTrainer:
             transforms.RandomApply([transforms.RandomAffine(degrees=0, translate=(0.1, 0.1))], p=0.4),
             transforms.RandomApply([transforms.RandomPerspective(distortion_scale=0.2)], p=0.3),
 
-            transforms.ToTensor(),
-            # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # efficientnet already normalizes the input
+            transforms.ToTensor()
         ])
+    
+        train_transform_major = transforms.Compose([
+            get_random_transform(),
+            transforms.ToTensor()
+        ])
+        
+        train_transform = [train_transform_major, train_transform_minor] #transforms for 0 and 1 class
 
         # For validation and test (no augmentation)
         eval_transform = transforms.Compose([
-            #transforms.Resize((224, 224)), #not needed since we already have scaled images
             transforms.ToTensor(),
-            # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]) # efficientnet already normalizes the input
         ])
 
         # Create datasets
