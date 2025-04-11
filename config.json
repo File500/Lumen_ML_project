@@ -5,7 +5,7 @@
     "EPOCHS_TO_TRAIN": 40,
     "NUM_WORKERS": 8,
     "SHUFFLE": true,
-    "LEARNING_RATE": 1e-6,
+    "LEARNING_RATE": 5e-6,
     "GPU_ID": "1",
     "BINARY_MODE": true
 }

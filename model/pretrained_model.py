@@ -16,7 +16,10 @@ class PretrainedMelanomaClassifier(nn.Module):
         # Modify the classifier to fit the number of classes
         self.efficientnet.classifier = nn.Sequential(
             nn.Dropout(0.2),
-            nn.Linear(1536, output_dim) #1280 for b0 model
+            nn.Linear(1536, output_dim) 
+            #1280 for b0 model 
+            #1536 for b3 model
+            #2048 for b5 model
         )
         
         self.binary_mode = binary_mode
