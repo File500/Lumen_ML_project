@@ -127,7 +127,7 @@ class CachedMelanomaDataset(Dataset):
         else:
             image = self.transform(image)
             
-        return image, target
+        return image, target, skin_type
 
 
 def load_model(model_path, model, optimizer):
