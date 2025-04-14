@@ -422,12 +422,13 @@ class ModelTrainer:
             all_labels = []
 
             loop = tqdm(dataloader, leave=False, desc=desc)
-            for image_batch, labels in loop:
+            for image_batch, labels, skin in loop:
                 image_batch = image_batch.to(self.device)
                 labels = labels.to(self.device)
+                skin = skin.to(self.device)
 
                 predicted_data = self.model(image_batch)
-                loss = self.loss_fn(predicted_data, labels)
+                loss = self.loss_fn(predicted_data, labels, skin)
                 losses.append(loss.detach().cpu().numpy())
 
                 # Handle predictions based on model output
@@ -474,7 +475,7 @@ class ModelTrainer:
         
         # Disable gradient calculation
         with torch.no_grad():
-            for images, labels in dataloader:
+            for images, labels, skin in dataloader:
                 # Move data to appropriate device
                 images = images.to(device)
                 labels = labels.to(device)
@@ -551,7 +552,7 @@ class ModelTrainer:
         
         # Disable gradient calculation
         with torch.no_grad():
-            for images, labels in dataloader:
+            for images, labels, skin in dataloader:
                 # Move data to appropriate device
                 images = images.to(device)
                 labels = labels.to(device)
