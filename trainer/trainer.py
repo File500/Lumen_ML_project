@@ -18,11 +18,11 @@ class FocalLoss(nn.Module):
         self.reduction = reduction
         self.pos_weight = pos_weight 
 
-    def forward(self, inputs, targets):
+    def forward(self, inputs, targets, skin):
         BCE_loss = nn.functional.binary_cross_entropy_with_logits(inputs, targets, reduction='none', pos_weight=self.pos_weight)
         pt = torch.exp(-BCE_loss)
 
-        focal_loss = self.alpha * (1 - pt) ** self.gamma * BCE_loss
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * BCE_loss + skin
 
         if self.reduction == 'mean':
             return focal_loss.mean()
@@ -37,11 +37,9 @@ def train():
     project_path = os.path.dirname(current_dir)
     config_file_path = os.path.join(project_path, "config.json")
     dataset_path = os.path.join(project_path, "data")
-    # dataset_training_files = os.path.join(dataset_path, "train_224X224_processed")
-    dataset_training_metadata = os.path.join(dataset_path, "deduplicated_metadata.csv")
+    dataset_training_metadata = os.path.join(dataset_path, "deduplicated_monk_scale_dataset_predictions.csv")
 
     dataset_training_files = "../../Lumen_Image_Data/train_300X300_processed"
-    # dataset_training_metadata = "../../Lumen_Image_Data/deduplicated_metadata.csv"
     
     # Load configuration
     with open(config_file_path, "r") as config_file:

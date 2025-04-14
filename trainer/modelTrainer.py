@@ -110,6 +110,9 @@ class CachedMelanomaDataset(Dataset):
         # Get the target label (0 for benign, 1 for malignant)
         target = self.data_frame.iloc[idx, 8]# Assuming 'target' is at column 8
         transform_type = self.data_frame.iloc[idx, 8]
+        skin_type = self.data_frame.iloc[idx, 10]
+
+        skin_type = torch.tensor(skin_type, dtype=torch.int).unsqueeze(0)
         
         if self.binary_mode:
             # For BCEWithLogitsLoss - single output with value 0 or 1
@@ -220,20 +223,20 @@ class ModelTrainer:
         
         # Perform stratified train/val/test split to maintain class distribution
         train_size, val_size, test_size = train_val_test_split
-        
+        full_df['strat_combined'] = full_df['target'] * 10 + full_df['monk_skin_type']
         # First split into train and temp (val+test combined) with stratification
         train_df, temp_df = train_test_split(
-            full_df, 
+            full_df,
             test_size=(val_size + test_size),
-            stratify=full_df['target'],  # This ensures the same ratio of malignant samples
+            stratify=full_df['strat_combined'],  # Stratify on combined column
             random_state=42
         )
-        
+
         # Then split temp into val and test with stratification
         val_df, test_df = train_test_split(
             temp_df,
             test_size=(test_size / (val_size + test_size)),
-            stratify=temp_df['target'],  # Maintain class distribution in val and test sets
+            stratify=temp_df['strat_combined'],  # Maintain joint distribution
             random_state=42
         )
         
@@ -374,13 +377,14 @@ class ModelTrainer:
         all_labels = []
 
         loop = tqdm(self.training_dataloader, leave=False)
-        for image_batch, labels in loop:
+        for image_batch, labels, skin in loop:
             image_batch = image_batch.to(self.device)
             labels = labels.to(self.device)
+            skin = skin.to(self.device)
 
             predicted_data = self.model(image_batch)
 
-            loss = self.loss_fn(predicted_data, labels)
+            loss = self.loss_fn(predicted_data, labels, skin)
 
             self.optimizer.zero_grad()
             loss.backward()
