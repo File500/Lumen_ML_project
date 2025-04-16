@@ -230,6 +230,32 @@ class AttentionSkinToneClassifier(nn.Module):
         features = self.feature_extractor(features)
         return self.classifier(features)
     
+    def get_features(self, x):
+        """
+        Extract features from the model before classification
+        
+        Args:
+            x (torch.Tensor): Input tensor
+        
+        Returns:
+            torch.Tensor: Extracted features
+        """
+        # Extract features
+        features = self.backbone.features(x)
+        
+        # Apply attention
+        attention_mask = self.attention(features)
+        features = features * attention_mask
+        
+        # Global pooling
+        features = self.backbone.avgpool(features)
+        features = torch.flatten(features, 1)
+        
+        # Feature extraction
+        features = self.feature_extractor(features)
+        
+        return features
+    
 
 class SkinToneFusionModel(nn.Module):
     def __init__(self, num_classes=7, freeze_backbone=True):

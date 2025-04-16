@@ -1,0 +1,14 @@
+{
+    "test_loss": 0.10564428567886353,
+    "test_accuracy": 0.972597988206729,
+    "test_precision": 0.9458850056369785,
+    "test_recall": 0.8840885142255005,
+    "test_f1": 0.9139433551198257,
+    "roc_auc": 0.9858607981523113,
+    "confusion_matrix": {
+        "true_negatives": 4769,
+        "false_positives": 48,
+        "false_negatives": 110,
+        "true_positives": 839
+    }
+}
