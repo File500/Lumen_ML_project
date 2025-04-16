@@ -1,7 +1,10 @@
 # Surpress warnings:
 def warn(*args, **kwargs):
     pass
+
+
 import warnings
+
 warnings.warn = warn
 
 import numpy as np
@@ -33,6 +36,7 @@ from model.pretrained_model import PretrainedMelanomaClassifier
 # Check if CUDA is available
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
+
 
 def mask_dark_pixels_torch(img, threshold=30, inpaint_radius=25):
     """
@@ -126,7 +130,6 @@ def mask_dark_pixels_torch(img, threshold=30, inpaint_radius=25):
 
 
 def resize_images_torch(image, target_size):
-
     img_copy = image.copy()
 
     # Clean the image using PyTorch
@@ -180,7 +183,8 @@ def analyse_folder_data(jpg_files, test_data) -> pd.DataFrame:
             current_image = Image.open(jpg_file).convert("RGB")
             cleaned_image = resize_images_torch(current_image, resize_size)
 
-            image_metadata = test_data.loc[test_data.image == jpg_file.stem]
+            if test_data.size != 0:
+                image_metadata = test_data.loc[test_data.image == jpg_file.stem]
 
             transform = transforms.Compose([transforms.ToTensor()])
             # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -208,6 +212,7 @@ def analyse_folder_data(jpg_files, test_data) -> pd.DataFrame:
 def read_folder_data(folder):
     folder = Path(folder)
     csv_file = None
+    test_data = pd.DataFrame()
 
     for file in folder.iterdir():
         if file.is_file() and file.suffix.lower() == '.csv':
@@ -216,15 +221,13 @@ def read_folder_data(folder):
 
     if csv_file is None:
         print("No CSV file found in the folder")
-        return
-
-    try:
-        test_data = pd.read_csv(csv_file)
-        print(f"Loaded CSV file: {csv_file.name}")
-
-    except Exception as e:
-        print(f"Error loading CSV file: {e}")
-        return
+    else:
+        try:
+            test_data = pd.read_csv(csv_file)
+            print(f"Loaded CSV file: {csv_file.name}")
+        except Exception as e:
+            print(f"Error loading CSV file: {e}")
+            return
 
     jpg_files = sorted([f for f in folder.iterdir() if f.is_file() and f.suffix.lower() in ['.jpg', '.jpeg']])
 
