@@ -6,6 +6,7 @@ import pandas as pd
 import seaborn as sns
 import torch
 import torch.optim as optim
+from torch.optim.lr_scheduler import CyclicLR
 import torch.nn as nn
 import torchvision.transforms as transforms
 import torchvision.models as models
@@ -19,10 +20,13 @@ import time
 import collections
 import random
 import gc
+import torch.nn.functional as F
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from model.skin_tone_model import AttentionSkinToneClassifier
 
 # Model Architectures
+
+TEST_NUMBER = 11
 
 # Modified Melanoma Classifier with 128-neuron layer before output
 class ModifiedMelanomaClassifier(nn.Module):
@@ -78,7 +82,7 @@ class CombinedTransferModel(nn.Module):
             param.requires_grad = False
         
         for param in self.melanoma_model.parameters():
-            param.requires_grad = False
+            param.requires_grad = True
         
         # Combined feature dimension (256 from skin model + 128 from melanoma model)
         combined_dim = 256 + 128
@@ -90,11 +94,13 @@ class CombinedTransferModel(nn.Module):
         # New classifier for combined features
         self.combined_classifier = nn.Sequential(
             nn.Linear(combined_dim, 256),
+            nn.BatchNorm1d(256),  # Add batch normalization
+            nn.ReLU(),
+            nn.Dropout(0.4),  # Increase dropout
+            nn.Linear(256, 128),
+            nn.BatchNorm1d(128),
             nn.ReLU(),
             nn.Dropout(0.3),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Dropout(0.2),
             nn.Linear(128, output_dim)
         )
         
@@ -102,16 +108,135 @@ class CombinedTransferModel(nn.Module):
     
     def forward(self, x):
         # Extract features from both models
-        skin_features = self.skin_tone_model.get_features(x)
+        with torch.no_grad():  # Ensure skin tone model remains frozen
+            skin_features = self.skin_tone_model.get_features(x)
+        
+        # Extract features from melanoma model (can be fine-tuned)
         melanoma_features = self.melanoma_model.get_features(x)
         
-        # Concatenate features
-        combined_features = torch.cat((skin_features, melanoma_features), dim=1)
+        # Scale features to have similar magnitudes (very important!)
+        skin_features = skin_features / (torch.norm(skin_features, dim=1, keepdim=True) + 1e-8)
+        melanoma_features = melanoma_features / (torch.norm(melanoma_features, dim=1, keepdim=True) + 1e-8)
+        
+        # Concatenate features with relative importance weighting
+        # Give melanoma features slightly more weight 
+        combined_features = torch.cat((skin_features * 0.8, melanoma_features * 1.2), dim=1)
         
         # Pass through the combined classifier
         output = self.combined_classifier(combined_features)
         return output
 
+class EnsembleModel(nn.Module):
+    def __init__(self, models, weights=None):
+        super(EnsembleModel, self).__init__()
+        self.models = nn.ModuleList(models)
+        
+        # Normalize weights
+        if weights is None:
+            self.weights = torch.ones(len(models))/len(models)
+        else:
+            sum_weights = sum(weights)
+            self.weights = torch.tensor([w/sum_weights for w in weights])
+    
+    def forward(self, x):
+        outputs = []
+        
+        for i, model in enumerate(self.models):
+            outputs.append(model(x) * self.weights[i])
+        
+        return sum(outputs)
+
+
+def create_and_evaluate_ensemble(models, test_loader, weights=None):
+    """Create and evaluate an ensemble model"""
+    # Create ensemble
+    ensemble = EnsembleModel(models, weights)
+    device = next(ensemble.parameters()).device
+    ensemble.to(device)
+    ensemble.eval()
+    
+    # Evaluate
+    criterion = FocalLoss(gamma=2.0, alpha=0.75)
+    
+    with torch.no_grad():
+        losses = []
+        all_preds = []
+        all_labels = []
+        
+        for images, labels in test_loader:
+            images = images.to(device)
+            labels = labels.to(device)
+            
+            outputs = ensemble(images)
+            loss = criterion(outputs, labels)
+            losses.append(loss.item())
+            
+            # Get predictions (use threshold of 0.3 as in your code)
+            preds = (torch.sigmoid(outputs) > 0.25).float().cpu().numpy()
+            all_preds.extend(preds)
+            all_labels.extend(labels.cpu().numpy())
+        
+        # Calculate metrics
+        all_preds = np.array(all_preds).flatten()
+        all_labels = np.array(all_labels).flatten()
+        
+        accuracy = accuracy_score(all_labels, all_preds)
+        precision = precision_score(all_labels, all_preds, zero_division=0)
+        recall = recall_score(all_labels, all_preds, zero_division=0)
+        f1 = f1_score(all_labels, all_preds, zero_division=0)
+    
+    # Create results dictionary
+    ensemble_results = {
+        'test_loss': float(np.mean(losses)),
+        'test_accuracy': float(accuracy),
+        'test_precision': float(precision),
+        'test_recall': float(recall),
+        'test_f1': float(f1)
+    }
+    
+    # Save ensemble results
+    ensemble_path = os.path.join("trained_model", f"combined_model_test{TEST_NUMBER}_ensemble")
+    os.makedirs(ensemble_path, exist_ok=True)
+    
+    import json
+    with open(os.path.join(ensemble_path, "ensemble_results.json"), 'w') as f:
+        json.dump(ensemble_results, f, indent=4)
+    
+    return ensemble, ensemble_results
+
+def evaluate_model(model, dataloader, criterion):
+    """Evaluate model on dataloader"""
+    model.eval()
+    device = next(model.parameters()).device
+    
+    with torch.no_grad():
+        losses = []
+        all_preds = []
+        all_labels = []
+        
+        for images, labels in dataloader:
+            images = images.to(device)
+            labels = labels.to(device)
+            
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            losses.append(loss.item())
+            
+            # Get predictions
+            preds = torch.sigmoid(outputs) > 0.5
+            all_preds.extend(preds.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+        
+        # Calculate metrics
+        all_preds = np.array(all_preds).flatten()
+        all_labels = np.array(all_labels).flatten()
+        
+        accuracy = accuracy_score(all_labels, all_preds)
+        precision = precision_score(all_labels, all_preds, zero_division=0)
+        recall = recall_score(all_labels, all_preds, zero_division=0)
+        f1 = f1_score(all_labels, all_preds, zero_division=0)
+        
+    return np.mean(losses), (accuracy, precision, recall, f1)
 
 # Dataset class from your existing code
 class CachedMelanomaDataset(Dataset):
@@ -193,14 +318,87 @@ class CachedMelanomaDataset(Dataset):
             image = self.transform(image)
             
         return image, target
+    
+class EarlyStopping:
+    """Early stops the training if monitored metric doesn't improve."""
+    def __init__(self, patience=7, verbose=False, delta=0, path='checkpoint.pth', 
+                 trace_func=print, monitor='loss', mode='min'):
+        self.patience = patience
+        self.verbose = verbose
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
+        self.delta = delta
+        self.path = path
+        self.trace_func = trace_func
+        self.monitor = monitor  # 'loss', 'f1', 'recall', etc.
+        self.mode = mode        # 'min' for loss, 'max' for metrics like F1, recall
+        
+        # Initialize best_val based on mode
+        self.best_val = float('inf') if mode == 'min' else -float('inf')
 
+    def __call__(self, value, model, save_path):
+        """
+        value: The metric to monitor (loss value or F1 score)
+        """
+        # Determine if improvement based on mode
+        if self.mode == 'min':
+            is_better = value < self.best_val - self.delta
+        else:  # 'max' mode
+            is_better = value > self.best_val + self.delta
+        
+        if self.best_score is None or is_better:
+            # Better score found
+            self.best_score = value  # Store the actual value
+            self.best_val = value
+            self.save_checkpoint(value, model, save_path)
+            self.counter = 0
+        else:
+            # No improvement
+            self.counter += 1
+            self.trace_func(f'EarlyStopping counter: {self.counter} out of {self.patience}')
+            if self.counter >= self.patience:
+                self.early_stop = True
+
+    def save_checkpoint(self, value, model, save_path):
+        """Save model when monitored metric improves."""
+        metric_name = "F1 score" if self.monitor == 'f1' else "Recall" if self.monitor == 'recall' else "Validation loss"
+        
+        if self.mode == 'min':
+            direction = "decreased"
+        else:  # 'max' mode
+            direction = "increased"
+            
+        if self.verbose:
+            self.trace_func(f'{metric_name} {direction} ({self.best_val:.6f} --> {value:.6f}).  Saving model ...')
+        
+        # Ensure the directory exists
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        
+        # Save the model
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            self.monitor: value  # Save the metric value with the appropriate key
+        }, save_path)
+
+class FocalLoss(nn.Module):
+    def __init__(self, gamma=2.0, alpha=0.25):
+        super(FocalLoss, self).__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+        
+    def forward(self, inputs, targets):
+        BCE_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
+        pt = torch.exp(-BCE_loss)  # prevents nans when probability 0
+        focal_loss = self.alpha * (1-pt)**self.gamma * BCE_loss
+        return focal_loss.mean()
 
 # Helper functions from your existing code
 def get_device():
     # Check if CUDA is available
     if torch.cuda.is_available():
         # Explicitly select GPU 2
-        device = torch.device("cuda:2")
+        device = torch.device("cuda:1")
         
         # Optional: Verify the selected GPU is within available device count
         if device.index < torch.cuda.device_count():
@@ -289,6 +487,46 @@ def load_model(model_path, model, optimizer=None):
 
     return model, optimizer, model_epoch
 
+def stratified_split(full_df, train_size, val_size, test_size, random_state=42):
+    """
+    Perform stratified split based on both target and skin type
+    
+    Args:
+        full_df (pd.DataFrame): Full dataframe
+        train_size (float): Proportion of training data
+        val_size (float): Proportion of validation data
+        test_size (float): Proportion of test data
+        random_state (int): Random seed for reproducibility
+    
+    Returns:
+        tuple: train_df, val_df, test_df
+    """
+    # Create a combined stratification column
+    full_df['stratify_col'] = full_df['target'].astype(str) + '_' + full_df['monk_skin_type'].astype(str)
+    
+    # First split into train and temp (val+test combined) with stratification
+    train_df, temp_df = train_test_split(
+        full_df, 
+        test_size=(val_size + test_size),
+        stratify=full_df['stratify_col'],
+        random_state=random_state
+    )
+    
+    # Then split temp into val and test with stratification
+    val_df, test_df = train_test_split(
+        temp_df,
+        test_size=(test_size / (val_size + test_size)),
+        stratify=temp_df['stratify_col'],
+        random_state=random_state
+    )
+    
+    # Remove the temporary stratification column
+    train_df = train_df.drop('stratify_col', axis=1)
+    val_df = val_df.drop('stratify_col', axis=1)
+    test_df = test_df.drop('stratify_col', axis=1)
+    
+    return train_df, val_df, test_df
+
 
 # Class for training the modified melanoma model
 class MelanomaModelTrainer:
@@ -316,18 +554,11 @@ class MelanomaModelTrainer:
         train_size, val_size, test_size = train_val_test_split
         
         # First split into train and temp (val+test combined) with stratification
-        train_df, temp_df = train_test_split(
+        train_df, val_df, test_df = stratified_split(
             full_df, 
-            test_size=(val_size + test_size),
-            stratify=full_df['target'],
-            random_state=42
-        )
-        
-        # Then split temp into val and test with stratification
-        val_df, test_df = train_test_split(
-            temp_df,
-            test_size=(test_size / (val_size + test_size)),
-            stratify=temp_df['target'],
+            train_size=train_size, 
+            val_size=val_size, 
+            test_size=test_size, 
             random_state=42
         )
         
@@ -399,7 +630,8 @@ class MelanomaModelTrainer:
         self.model.to(self.device)
         
         # Define loss function
-        self.criterion = nn.BCEWithLogitsLoss()
+        #self.criterion = nn.BCEWithLogitsLoss()
+        self.criterion = FocalLoss(gamma=2.0, alpha=0.75)
         
         # Initialize history for tracking metrics
         self.history = {
@@ -441,20 +673,46 @@ class MelanomaModelTrainer:
     
     def train_model(self):
         """
-        Train the modified melanoma model using a two-phase approach
+        Train the modified melanoma model using a two-phase approach with early stopping
         """
         # Phase 1: Train only the classifier
-        optimizer_phase1 = optim.AdamW(self.model.efficientnet.classifier.parameters(), lr=self.learning_rate)
+        optimizer_phase1 = optim.AdamW(self.model.efficientnet.classifier.parameters(), lr=self.learning_rate, weight_decay=0.01)
         
         # Phase 2: Fine-tune the whole model
-        optimizer_phase2 = optim.AdamW(self.model.parameters(), lr=self.learning_rate/10)
+        optimizer_phase2 = optim.AdamW(self.model.parameters(), lr=self.learning_rate/10, weight_decay=0.01)
         
         # Learning rate scheduler for phase 2
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             optimizer_phase2, mode='min', factor=0.5, patience=2, verbose=True
         )
         
+        # Create save directory if it doesn't exist
+        save_dir = os.path.join("trained_model", f"melanoma_classifier_test{TEST_NUMBER}")
+        os.makedirs(save_dir, exist_ok=True)
+        
+        # Initialize early stopping for Phase 1
+        
+        early_stopping_phase1 = EarlyStopping(
+            patience=15,  # Increase from 10
+            verbose=True,
+            delta=0.001,
+            path=os.path.join(save_dir, 'checkpoint_phase1.pth'),
+            monitor='loss',  # Monitor f1 or  loss
+            mode='min'     # Higher is better for F1
+        )
+        
+        # Initialize early stopping for Phase 2
+        early_stopping_phase2 = EarlyStopping(
+            patience=15,  # Increase from 10
+            verbose=True,
+            delta=0.001,
+            path=os.path.join(save_dir, 'checkpoint_phase2.pth'),
+            monitor='f1',  # Monitor F1 or loss
+            mode='max'     # Higher is better for F1
+        )
+        
         best_val_loss = float('inf')
+        best_val_f1 = -float('inf')
         best_model_state = None
         
         # Determine the split between phases
@@ -478,6 +736,7 @@ class MelanomaModelTrainer:
             
             # Validation
             val_loss, val_metrics = self._evaluate(self.val_loader)
+            val_f1 = val_metrics[3]
             
             # Update history
             self._update_history(train_loss, val_loss, train_metrics, val_metrics)
@@ -491,45 +750,71 @@ class MelanomaModelTrainer:
                 best_model_state = self._create_model_state_dict(
                     epoch+1, train_loss, val_loss, train_metrics, val_metrics
                 )
+            
+            # Early stopping check
+            early_stopping_phase1(val_loss, self.model, early_stopping_phase1.path)
+            if early_stopping_phase1.early_stop:
+                print("Early stopping triggered in Phase 1")
+                break
 
-        #clear_gpu_cache(self.device)
+            #if val_f1 > best_val_f1:
+            #    best_val_f1 = val_f1
+            #    best_model_state = self._create_model_state_dict(
+            #        epoch+1, train_loss, val_loss, train_metrics, val_metrics
+            #    )
+            #    print(f"New best F1 score: {best_val_f1:.4f}")
+        
+            # Early stopping check using F1 score
+            #early_stopping_phase1(val_f1, self.model, early_stopping_phase1.path)
+            #if early_stopping_phase1.early_stop:
+            #    print("Early stopping triggered in Phase 1")
+            #    break
+
+        # Clear GPU cache between phases
+        clear_gpu_cache(self.device)
 
         # Phase 2: Fine-tune the whole model
-        #if self.epochs > phase1_epochs:
-        #    print("\nPhase 2: Fine-tuning the entire model")
+        if self.epochs > phase1_epochs and not early_stopping_phase1.early_stop:
+            print("\nPhase 2: Fine-tuning the entire model")
             
-        #    # Unfreeze all layers
-        #    for param in self.model.parameters():
-        #        param.requires_grad = True
-        #    
-        #    for epoch in range(phase1_epochs, self.epochs):
-        #        print(f"\nPhase 2 - Epoch {epoch+1}/{self.epochs}")
-        #        
-        #        # Training
-        #        self.model.train()
-        #        train_loss, train_metrics = self._train_epoch(optimizer_phase2)
-        #        
-        #        # Validation
-        #        val_loss, val_metrics = self._evaluate(self.val_loader)
-        #        
-        #        # Update scheduler
-        #       scheduler.step(val_loss)
-        #        
-        #       # Update history
-        #       self._update_history(train_loss, val_loss, train_metrics, val_metrics)
-        #        
-        #        # Print metrics
-        #        self._print_metrics(epoch+1, self.epochs, train_loss, val_loss, train_metrics, val_metrics, phase=2)
-        #        
-        #        # Save best model
-        #        if val_loss < best_val_loss:
-        #            best_val_loss = val_loss
-        #            best_model_state = self._create_model_state_dict(
-        #                epoch+1, train_loss, val_loss, train_metrics, val_metrics
-        #            )
+            # Unfreeze all layers
+            for param in self.model.parameters():
+                param.requires_grad = True
+            
+            for epoch in range(phase1_epochs, self.epochs):
+                print(f"\nPhase 2 - Epoch {epoch+1}/{self.epochs}")
+                
+                # Training
+                self.model.train()
+                train_loss, train_metrics = self._train_epoch(optimizer_phase2)
+                
+                # Validation
+                val_loss, val_metrics = self._evaluate(self.val_loader)
+                
+                # Update scheduler
+                scheduler.step(val_loss)
+                
+                # Update history
+                self._update_history(train_loss, val_loss, train_metrics, val_metrics)
+                
+                # Print metrics
+                self._print_metrics(epoch+1, self.epochs, train_loss, val_loss, train_metrics, val_metrics, phase=2)
+                
+                # Save best model
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    best_model_state = self._create_model_state_dict(
+                        epoch+1, train_loss, val_loss, train_metrics, val_metrics
+                    )
+                
+                # Early stopping check
+                early_stopping_phase2(val_loss, self.model, early_stopping_phase2.path)
+                if early_stopping_phase2.early_stop:
+                    print("Early stopping triggered in Phase 2")
+                    break
         
         # Save the best model
-        save_path = os.path.join("trained_model", "melanoma_classifier")
+        save_path = os.path.join("trained_model", f"melanoma_classifier_test{TEST_NUMBER}")
         os.makedirs(save_path, exist_ok=True)
         
         if best_model_state:
@@ -545,6 +830,8 @@ class MelanomaModelTrainer:
         # Evaluate on test set
         print("\nEvaluating model on test set...")
         test_results = self._test_model()
+
+        clear_gpu_cache(self.device)
         
         return self.model, test_results
     
@@ -607,7 +894,7 @@ class MelanomaModelTrainer:
                 losses.append(loss.detach().cpu().numpy())
 
                 # Get predictions
-                preds = torch.sigmoid(predicted_data).round().cpu().numpy()
+                preds = (torch.sigmoid(predicted_data) > 0.25).float().cpu().numpy()
                 all_preds.extend(preds)
                 all_labels.extend(labels.cpu().numpy())
 
@@ -667,7 +954,7 @@ class MelanomaModelTrainer:
     def _plot_training_history(self):
         """Plot training and validation metrics over epochs"""
         # Create directory for saving plots
-        save_path = os.path.join("trained_model", "melanoma_classifier")
+        save_path = os.path.join("trained_model", f"melanoma_classifier_test{TEST_NUMBER}")
         os.makedirs(save_path, exist_ok=True)
         
         # Create figure with multiple subplots
@@ -755,7 +1042,7 @@ class MelanomaModelTrainer:
         }
         
         # Save results to JSON
-        save_path = os.path.join("trained_model", "melanoma_classifier")
+        save_path = os.path.join("trained_model", f"melanoma_classifier_test{TEST_NUMBER}")
         os.makedirs(save_path, exist_ok=True)
         
         import json
@@ -814,7 +1101,7 @@ class MelanomaModelTrainer:
         plt.legend(loc="lower right")
         
         # Save the plot
-        save_path = os.path.join("trained_model", "melanoma_classifier")
+        save_path = os.path.join("trained_model", f"melanoma_classifier_test{TEST_NUMBER}")
         os.makedirs(save_path, exist_ok=True)
         
         plt.savefig(os.path.join(save_path, 'melanoma_roc_curve.png'), dpi=300)
@@ -843,7 +1130,7 @@ class MelanomaModelTrainer:
                 
                 # Get model predictions
                 outputs = self.model(images)
-                preds = torch.sigmoid(outputs).round().cpu().numpy()
+                preds = (torch.sigmoid(outputs) > 0.25).float().cpu().numpy()
                 
                 # Flatten labels
                 labels = labels.cpu().numpy().flatten()
@@ -884,7 +1171,7 @@ class MelanomaModelTrainer:
                 transform=plt.gca().transAxes)
         
         # Save the plot
-        save_path = os.path.join("trained_model", "melanoma_classifier")
+        save_path = os.path.join("trained_model", f"melanoma_classifier_test{TEST_NUMBER}")
         os.makedirs(save_path, exist_ok=True)
         
         plt.tight_layout()
@@ -992,18 +1279,11 @@ class CombinedModelTrainer:
         train_size, val_size, test_size = train_val_test_split
         
         # First split into train and temp (val+test combined) with stratification
-        train_df, temp_df = train_test_split(
+        train_df, val_df, test_df = stratified_split(
             full_df, 
-            test_size=(val_size + test_size),
-            stratify=full_df['target'],
-            random_state=42
-        )
-        
-        # Then split temp into val and test with stratification
-        val_df, test_df = train_test_split(
-            temp_df,
-            test_size=(test_size / (val_size + test_size)),
-            stratify=temp_df['target'],
+            train_size=train_size, 
+            val_size=val_size, 
+            test_size=test_size, 
             random_state=42
         )
         
@@ -1015,13 +1295,13 @@ class CombinedModelTrainer:
         
         # Data transformations
         train_transform_minor = transforms.Compose([
-            transforms.RandomApply([transforms.RandomRotation(15)], p=0.5),
-            transforms.RandomApply([transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2)], p=0.6),
-            transforms.RandomApply([transforms.GaussianBlur(kernel_size=(5, 5), sigma=(0.1, 2.0))], p=0.2),
+            transforms.RandomRotation(20),  # Increased rotation
+            transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1),
+            transforms.RandomApply([transforms.GaussianBlur(kernel_size=(5, 5), sigma=(0.1, 2.0))], p=0.3),
             transforms.RandomHorizontalFlip(p=0.5),
-            transforms.RandomVerticalFlip(p=0.2),
-            transforms.RandomApply([transforms.RandomAffine(degrees=0, translate=(0.1, 0.1))], p=0.4),
-            transforms.RandomApply([transforms.RandomPerspective(distortion_scale=0.2)], p=0.3),
+            transforms.RandomVerticalFlip(p=0.3),
+            transforms.RandomApply([transforms.RandomAffine(degrees=0, translate=(0.2, 0.2))], p=0.4),
+            transforms.RandomPerspective(distortion_scale=0.3, p=0.3),
             transforms.ToTensor()
         ])
     
@@ -1071,14 +1351,23 @@ class CombinedModelTrainer:
         self.test_loader = create_data_loader(test_dataset, batch_size, num_workers)
         
         # Define loss function
-        self.criterion = nn.BCEWithLogitsLoss()
-        
+        #self.criterion = nn.BCEWithLogitsLoss()
+        self.criterion = FocalLoss(gamma=2.0, alpha=0.75)
+
         # Initialize optimizer (only for the combined classifier)
-        self.optimizer = optim.Adam(self.combined_model.combined_classifier.parameters(), lr=learning_rate)
+        self.optimizer = optim.AdamW(self.combined_model.combined_classifier.parameters(), lr=learning_rate, weight_decay=0.01)
         
         # Initialize scheduler
-        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, mode='min', factor=0.5, patience=2, verbose=True
+        #self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        #    self.optimizer, mode='min', factor=0.5, patience=2, verbose=True
+        #)
+
+        self.scheduler = CyclicLR(
+            self.optimizer,
+            base_lr=learning_rate/10,  # 0.00003
+            max_lr=learning_rate*5,    # 0.0015
+            step_size_up=len(self.train_loader)*3,  # 3 epochs
+            mode='triangular2'  # Decreases max_lr by half each cycle
         )
         
         # Initialize history for tracking metrics
@@ -1095,7 +1384,22 @@ class CombinedModelTrainer:
         print("Starting Combined Transfer Learning Model Training...")
         
         best_val_loss = float('inf')
+        best_val_f1 = -float('inf')
         best_model_state = None
+        
+        # Create save directory if it doesn't exist
+        save_dir = os.path.join("trained_model", f"combined_model_test{TEST_NUMBER}")
+        os.makedirs(save_dir, exist_ok=True)
+        
+        # Initialize early stopping
+        early_stopping = EarlyStopping(
+            patience=15,  # Increase from 10
+            verbose=True,
+            delta=0.001,
+            path=os.path.join(save_dir, 'checkpoint.pth'),
+            monitor='f1',  # Monitor F1 instead of loss
+            mode='max'     # Higher is better for F1
+        )
         
         for epoch in range(self.epochs):
             print(f"\nEpoch {epoch+1}/{self.epochs}")
@@ -1105,9 +1409,11 @@ class CombinedModelTrainer:
             
             # Validation
             val_loss, val_metrics = self._evaluate(self.val_loader)
+
+            val_f1 = val_metrics[3]
             
             # Update scheduler
-            self.scheduler.step(val_loss)
+            self.scheduler.step()
             
             # Update history
             self._update_history(train_loss, val_loss, train_metrics, val_metrics)
@@ -1116,14 +1422,32 @@ class CombinedModelTrainer:
             self._print_metrics(epoch+1, self.epochs, train_loss, val_loss, train_metrics, val_metrics)
             
             # Save best model
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
+            #if val_loss < best_val_loss:
+            #    best_val_loss = val_loss
+            #    best_model_state = self._create_model_state_dict(
+            #        epoch+1, train_loss, val_loss, train_metrics, val_metrics
+            #    )
+            
+            # Early stopping check
+            #early_stopping(val_loss, self.combined_model, early_stopping.path)
+            #if early_stopping.early_stop:
+            #    print("Early stopping triggered!")
+            #    break
+
+            if val_f1 > best_val_f1:
+                best_val_f1 = val_f1
                 best_model_state = self._create_model_state_dict(
                     epoch+1, train_loss, val_loss, train_metrics, val_metrics
                 )
-        
+                print(f"New best F1 score: {best_val_f1:.4f}")
+
+            early_stopping(val_f1, self.combined_model, early_stopping.path)
+            if early_stopping.early_stop:
+                print("Early stopping triggered!")
+                break
+
         # Save the best model
-        save_path = os.path.join("trained_model", "combined_model")
+        save_path = os.path.join("trained_model", f"combined_model_test{TEST_NUMBER}")
         os.makedirs(save_path, exist_ok=True)
         
         if best_model_state:
@@ -1204,7 +1528,7 @@ class CombinedModelTrainer:
                 losses.append(loss.detach().cpu().numpy())
 
                 # Get predictions
-                preds = torch.sigmoid(outputs).round().cpu().numpy()
+                preds = (torch.sigmoid(outputs) > 0.25).float().cpu().numpy()
                 all_preds.extend(preds)
                 all_labels.extend(labels.cpu().numpy())
 
@@ -1264,7 +1588,7 @@ class CombinedModelTrainer:
     def _plot_training_history(self):
         """Plot training and validation metrics over epochs"""
         # Create directory for saving plots
-        save_path = os.path.join("trained_model", "combined_model")
+        save_path = os.path.join("trained_model", f"combined_model_test{TEST_NUMBER}")
         os.makedirs(save_path, exist_ok=True)
         
         # Create figure with multiple subplots
@@ -1362,7 +1686,7 @@ class CombinedModelTrainer:
         plt.legend(loc="lower right")
         
         # Save the plot
-        save_path = os.path.join("trained_model", "combined_model")
+        save_path = os.path.join("trained_model", f"combined_model_test{TEST_NUMBER}")
         os.makedirs(save_path, exist_ok=True)
         
         plt.savefig(os.path.join(save_path, 'combined_roc_curve.png'))
@@ -1391,7 +1715,7 @@ class CombinedModelTrainer:
                 
                 # Get model predictions
                 outputs = self.combined_model(images)
-                preds = torch.sigmoid(outputs).round().cpu().numpy()
+                preds = (torch.sigmoid(outputs) > 0.25).float().cpu().numpy()
                 
                 # Flatten labels
                 labels = labels.cpu().numpy().flatten()
@@ -1432,7 +1756,7 @@ class CombinedModelTrainer:
                 transform=plt.gca().transAxes)
         
         # Save the plot
-        save_path = os.path.join("trained_model", "combined_model")
+        save_path = os.path.join("trained_model", f"combined_model_test{TEST_NUMBER}")
         os.makedirs(save_path, exist_ok=True)
         
         plt.tight_layout()
@@ -1488,7 +1812,7 @@ class CombinedModelTrainer:
             }
             
             # Save results to JSON
-            save_path = os.path.join("trained_model", "combined_model")
+            save_path = os.path.join("trained_model", f"combined_model_test{TEST_NUMBER}")
             os.makedirs(save_path, exist_ok=True)
             
             import json
@@ -1580,6 +1904,67 @@ def save_combined_model_summary(combined_model, filename='combined_model_summary
     return filepath
 
 
+def train_ensemble_models(config, num_models=3, base_melanoma_path=None, base_skin_path=None):
+    """Train multiple models with different configurations for ensemble"""
+    models = []
+    results = []
+    
+    for i in range(num_models):
+        print(f"\n--- Training Ensemble Model {i+1}/{num_models} ---\n")
+        
+        # Create a variant configuration
+        model_config = config.copy()
+        model_config["random_seed"] = 42 + i*10
+        
+        # Vary key hyperparameters
+        lr_variation = 0.8 + 0.4*i/num_models  # 0.8x to 1.2x 
+        model_config["combined_lr"] = config["combined_lr"] * lr_variation
+        
+        # Save to a unique directory
+        ensemble_path = os.path.join("trained_model", f"combined_model_test{TEST_NUMBER}_ensemble{i+1}")
+        os.makedirs(ensemble_path, exist_ok=True)
+        
+        # Set random seed
+        torch.manual_seed(model_config["random_seed"])
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(model_config["random_seed"])
+        
+        # Create trainer
+        trainer = CombinedModelTrainer(
+            dataset_path=model_config["dataset_path"],
+            csv_file=model_config["csv_file"],
+            img_dir=model_config["img_dir"],
+            batch_size=model_config["combined_batch_size"],
+            num_workers=model_config["num_workers"],
+            skin_model_path=base_skin_path,
+            melanoma_model_path=base_melanoma_path,
+            epochs=model_config["combined_epochs"],
+            learning_rate=model_config["combined_lr"]
+        )
+        
+        # Train model
+        model, result = trainer.train_model()
+        
+        # Save model
+        torch.save(
+            model.state_dict(), 
+            os.path.join(ensemble_path, "ensemble_model.pth")
+        )
+        
+        # Save results
+        import json
+        with open(os.path.join(ensemble_path, "results.json"), 'w') as f:
+            json.dump(result, f, indent=4)
+        
+        # Add to lists
+        models.append(model)
+        results.append(result)
+        
+        # Clear memory
+        clear_gpu_cache()
+    
+    return models, results
+
 # Main function to run the complete pipeline
 def run_transfer_learning_pipeline(config):
     """
@@ -1606,7 +1991,7 @@ def run_transfer_learning_pipeline(config):
             dataset_path=config["dataset_path"],
             csv_file=config["csv_file"],
             img_dir=config["img_dir"],
-            batch_size=config["batch_size"],
+            batch_size=config["melanoma_batch_size"],
             num_workers=config["num_workers"],
             epochs=config["melanoma_epochs"],
             learning_rate=config["melanoma_lr"]
@@ -1627,9 +2012,9 @@ def run_transfer_learning_pipeline(config):
 
     else:
         # Use existing modified melanoma model
-        melanoma_model_path = config["modified_melanoma_model"]
+        melanoma_model_path = config["melanoma_model_path"]
         print(f"Skipping melanoma model training, using existing model: {melanoma_model_path}")
-        # Initialize with None since we don't have results if skipping training
+        # Initialize with None since we don't have results if skipping 
         melanoma_results = None
     
     # Step 2: Train the combined transfer learning model
@@ -1643,7 +2028,7 @@ def run_transfer_learning_pipeline(config):
             dataset_path=config["dataset_path"],
             csv_file=config["csv_file"],
             img_dir=config["img_dir"],
-            batch_size=config["batch_size"],
+            batch_size=config["combined_batch_size"],
             num_workers=config["num_workers"],
             skin_model_path=config["skin_model_path"],
             melanoma_model_path=melanoma_model_path,
@@ -1655,6 +2040,44 @@ def run_transfer_learning_pipeline(config):
         trained_combined_model, combined_results = combined_trainer.train_model()
 
         save_combined_model_summary(trained_combined_model)
+
+        if config.get("use_ensemble", False):
+            print("\n========== PHASE 3: TRAINING ENSEMBLE MODELS ==========\n")
+            
+            clear_gpu_cache()
+            
+            # Call function to train ensemble models
+            ensemble_models, ensemble_results_list = train_ensemble_models(
+                config=config,
+                num_models=config.get("num_ensemble_models", 3),
+                base_melanoma_path=melanoma_model_path,
+                base_skin_path=config["skin_model_path"]
+            )
+            
+            # Create and evaluate the ensemble
+            test_loader = combined_trainer.test_loader  # Reuse the test loader
+            
+            # Get individual F1 scores to use as weights
+            weights = [result['test_f1'] for result in ensemble_results_list]
+            
+            ensemble_model, ensemble_results = create_and_evaluate_ensemble(
+                ensemble_models, 
+                test_loader,
+                weights=weights
+            )
+            
+            # Print ensemble results
+            print("\n========== ENSEMBLE MODEL RESULTS ==========\n")
+            for key, value in ensemble_results.items():
+                if key != 'confusion_matrix':
+                    print(f"  {key}: {value:.4f}")
+            
+            # Compare with single model
+            print("\nEnsemble vs. Single Model Improvement:")
+            for key in combined_results:
+                if key not in ['confusion_matrix', 'test_loss']:
+                    diff = ensemble_results[key] - combined_results[key]
+                    print(f"  {key}: {diff:.4f} ({'+' if diff > 0 else ''}{diff/combined_results[key]*100:.2f}%)")
         
         # Print final results
         print("\n========== FINAL RESULTS ==========\n")
@@ -1698,24 +2121,28 @@ if __name__ == "__main__":
     config = {
         # Dataset paths
         "dataset_path":  os.path.join(DATA_PATH, "dataset_splits"),
-        "csv_file": os.path.join(DATA_PATH, "deduplicated_monk_scale_dataset.csv"),
+        "csv_file": os.path.join(DATA_PATH, "deduplicated_monk_scale_dataset_predictions.csv"),
         "img_dir":  os.path.join(DATA_PATH, "train_300X300_processed") ,
         
         # Model paths
         "skin_model_path": os.path.join(PROJECT_PATH, "trained_model", "skin_type_classifier", "EFNet_b3_300X300_test18", "final_model.pth"),
-        #"original_melanoma_model": "path/to/original_melanoma_model.pth",  # Optional
+        "melanoma_model_path": os.path.join(PROJECT_PATH, "trained_model", "melanoma_classifier_test9", "modified_melanoma_model.pth"), 
         
         # Training options
-        "train_melanoma": True,
+        "train_melanoma": False,
         "train_combined": True,
         
         # Training parameters
-        "batch_size": 32,
+        "melanoma_batch_size": 32,
+        "combined_batch_size": 16,
         "num_workers": 4,
         "melanoma_epochs": 50,
         "combined_epochs": 50,
-        "melanoma_lr": 0.001,
-        "combined_lr": 0.001
+        "melanoma_lr": 0.0005,
+        "combined_lr": 0.0003,
+
+        "use_ensemble": False,
+        "num_ensemble_models": 3
     }
     
     # Uncomment to run the pipeline

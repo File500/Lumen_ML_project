@@ -1,0 +1,13 @@
+=== Training Parameters ===
+Date: 2025-04-12 19:56:59
+
+=== Loss Function ===
+Type: FocalOrdinalWassersteinLoss
+
+=== Optimizer ===
+Type: AdamW
+Learning Rate: 0.00029195328646414875
+Weight Decay: 0.0001
+
+=== Learning Rate Scheduler ===
+No scheduler used
