@@ -317,7 +317,7 @@ class ModelTrainer:
         )
 
         # used for oversampling class 1 30% / 70% class 0
-        sampler = create_balanced_sampler(train_dataset, target_class=1, target_ratio=0.3)
+        sampler = create_balanced_sampler(train_dataset, target_class=1, target_ratio=0.4)
         
         # Create data loaders
         self.training_dataloader = create_data_loader(train_dataset, training_batch_size, num_workers, sampler)

@@ -6,6 +6,6 @@
     "NUM_WORKERS": 8,
     "SHUFFLE": true,
     "LEARNING_RATE": 1e-6,
-    "GPU_ID": "1",
+    "GPU_ID": "2",
     "BINARY_MODE": true
 }
