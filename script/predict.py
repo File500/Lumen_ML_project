@@ -176,35 +176,41 @@ def analyse_folder_data(jpg_files, test_data) -> pd.DataFrame:
     checkpoint = torch.load(model_path, map_location=device)
     model.load_state_dict(checkpoint['model_state'])
     model.eval()
+    
+    with torch.no_grad():
+        for jpg_file in tqdm(jpg_files):
+            try:
 
-    for jpg_file in tqdm(jpg_files):
-        try:
+                current_image = Image.open(jpg_file).convert("RGB")
+                cleaned_image = resize_images_torch(current_image, resize_size)
 
-            current_image = Image.open(jpg_file).convert("RGB")
-            cleaned_image = resize_images_torch(current_image, resize_size)
+                if test_data.size != 0:
+                    image_metadata = test_data.loc[test_data.image == jpg_file.stem]
 
-            if test_data.size != 0:
-                image_metadata = test_data.loc[test_data.image == jpg_file.stem]
+                transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+                # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
-            transform = transforms.Compose([transforms.ToTensor()])
-            # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+                composed_image_tensor = transform(cleaned_image).unsqueeze(0).to(device)
 
-            composed_image_tensor = transform(cleaned_image).unsqueeze(0).to(device)
+                
+                predicted_data = model(composed_image_tensor)
 
-            predicted_data = model(composed_image_tensor)
+                # Handle predictions based on model output
+                print(predicted_data)
+                if len(predicted_data.shape) == 1 or predicted_data.shape[1] == 1:  # Binary with single output
+                    preds = torch.sigmoid(predicted_data)
+                    print(preds)
+                    preds = (preds > 0.6).float().cpu().numpy()
+                else:  # Multi-class with multiple outputs
+                    preds = torch.argmax(predicted_data, dim=1, keepdim=True).detach().numpy()
+                print(preds)
 
-            # Handle predictions based on model output
-            if len(predicted_data.shape) == 1 or predicted_data.shape[1] == 1:  # Binary with single output
-                preds = torch.sigmoid(predicted_data).round().detach().numpy()
-            else:  # Multi-class with multiple outputs
-                preds = torch.argmax(predicted_data, dim=1, keepdim=True).detach().numpy()
+                # print(int(preds[0, 0]))
+                solution.loc[len(solution)] = [jpg_file.stem, int(preds[0, 0])]
 
-            # print(int(preds[0, 0]))
-            solution.loc[len(solution)] = [jpg_file.stem, int(preds[0, 0])]
-
-        except Exception as e:
-            print(f"Error processing {jpg_file.name}: {e}")
-            continue
+            except Exception as e:
+                print(f"Error processing {jpg_file.name}: {e}")
+                continue
 
     return solution
 
