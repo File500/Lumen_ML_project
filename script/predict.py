@@ -196,14 +196,11 @@ def analyse_folder_data(jpg_files, test_data) -> pd.DataFrame:
                 predicted_data = model(composed_image_tensor)
 
                 # Handle predictions based on model output
-                print(predicted_data)
                 if len(predicted_data.shape) == 1 or predicted_data.shape[1] == 1:  # Binary with single output
                     preds = torch.sigmoid(predicted_data)
-                    print(preds)
                     preds = (preds > 0.6).float().cpu().numpy()
                 else:  # Multi-class with multiple outputs
                     preds = torch.argmax(predicted_data, dim=1, keepdim=True).detach().numpy()
-                print(preds)
 
                 # print(int(preds[0, 0]))
                 solution.loc[len(solution)] = [jpg_file.stem, int(preds[0, 0])]
