@@ -1,0 +1,14 @@
+Test Set Metrics (Threshold: 0.3)
+Accuracy: 0.9728
+Precision: 0.9323
+Recall: 0.8999
+F1 Score: 0.9158
+
+Confusion Matrix:
+True Negatives: 4755
+False Positives: 62
+False Negatives: 95
+True Positives: 854
+
+Total False Positives: 62
+Total False Negatives: 95

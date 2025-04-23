@@ -34,6 +34,7 @@ MANIFEST
 
 #data
 /data/ISIC_2020_Training_JPEG/train/*.jpg
+/data/ISIC_2020_Test_Input/
 /data/train_224X224/*.jpg
 /data/train_224X224_processed/*.jpg
 /data/train_300X300/*.jpg

@@ -1,0 +1,32 @@
+=== Image Transformation Details ===
+Date: 2025-04-23 16:03:41
+
+=== Training Transformations ===
+1. RandomHorizontalFlip
+   - Probability: 0.5
+2. RandomVerticalFlip
+   - Probability: 0.2
+3. RandomRotation
+   - Degrees: [-5.0, 5.0]
+4. ColorJitter
+   - Brightness: (0.95, 1.05)
+   - Contrast: (0.95, 1.05)
+   - Saturation: None
+   - Hue: None
+5. RandomResizedCrop
+6. RandomPerspective
+   - Probability: 0.3
+   - Distortion Scale: 0.2
+7. RandomAffine
+   - Degrees: [-10.0, 10.0]
+   - Translate: (0.1, 0.1)
+   - Scale: (0.9, 1.1)
+   - Shear: [-7.0, 7.0]
+8. RandomAdjustSharpness
+   - Probability: 0.3
+9. ToTensor
+
+=== Additional Details ===
+Use LAB Color Space: True
+Image Dimension: 300
+Model Type: b3

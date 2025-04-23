@@ -22,221 +22,11 @@ import random
 import gc
 import torch.nn.functional as F
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from model.skin_tone_model import AttentionSkinToneClassifier
+from model.skin_tone_model import EfficientNetB3SkinToneClassifier
+from model.modified_melanoma_model import ModifiedMelanomaClassifier
+from model.combined_model import CombinedTransferModel
 
-# Model Architectures
-
-TEST_NUMBER = 11
-
-# Modified Melanoma Classifier with 128-neuron layer before output
-class ModifiedMelanomaClassifier(nn.Module):
-    def __init__(self, num_classes=2, binary_mode=True):
-        super(ModifiedMelanomaClassifier, self).__init__()
-       
-        # Load EfficientNet-B3 with pretrained weights
-        self.efficientnet = models.efficientnet_b3(weights=models.EfficientNet_B3_Weights.IMAGENET1K_V1)
-        
-        # Get the input features size for the final classifier
-        in_features = 1536  # for EfficientNet-B3
-        
-        # Add a 128-neuron layer before the output
-        self.efficientnet.classifier = nn.Sequential(
-            nn.Dropout(0.2),
-            nn.Linear(in_features, 128),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(128, 1 if binary_mode else num_classes)
-        )
-        
-        self.binary_mode = binary_mode
-   
-    def forward(self, x):
-        return self.efficientnet(x)
-    
-    # Method to get the 128-dimensional features before the final classification layer
-    def get_features(self, x):
-        # Extract features from backbone
-        x = self.efficientnet.features(x)
-        x = self.efficientnet.avgpool(x)
-        x = torch.flatten(x, 1)
-        
-        # Get output from the first part of the classifier (128-dim features)
-        features = self.efficientnet.classifier[0](x)  # Dropout
-        features = self.efficientnet.classifier[1](features)  # Linear to 128
-        features = self.efficientnet.classifier[2](features)  # ReLU
-        
-        return features
-
-
-# Combined Transfer Learning Model
-class CombinedTransferModel(nn.Module):
-    def __init__(self, skin_tone_model, melanoma_model, num_classes=2, binary_mode=True):
-        super(CombinedTransferModel, self).__init__()
-        
-        # Store the pretrained models
-        self.skin_tone_model = skin_tone_model
-        self.melanoma_model = melanoma_model
-        
-        # Freeze the parameters of the pretrained models
-        for param in self.skin_tone_model.parameters():
-            param.requires_grad = False
-        
-        for param in self.melanoma_model.parameters():
-            param.requires_grad = True
-        
-        # Combined feature dimension (256 from skin model + 128 from melanoma model)
-        combined_dim = 256 + 128
-        
-        # For binary classification with BCEWithLogitsLoss, use 1 output
-        # For multi-class classification with CrossEntropyLoss, use num_classes outputs
-        output_dim = 1 if binary_mode else num_classes
-        
-        # New classifier for combined features
-        self.combined_classifier = nn.Sequential(
-            nn.Linear(combined_dim, 256),
-            nn.BatchNorm1d(256),  # Add batch normalization
-            nn.ReLU(),
-            nn.Dropout(0.4),  # Increase dropout
-            nn.Linear(256, 128),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(128, output_dim)
-        )
-        
-        self.binary_mode = binary_mode
-    
-    def forward(self, x):
-        # Extract features from both models
-        with torch.no_grad():  # Ensure skin tone model remains frozen
-            skin_features = self.skin_tone_model.get_features(x)
-        
-        # Extract features from melanoma model (can be fine-tuned)
-        melanoma_features = self.melanoma_model.get_features(x)
-        
-        # Scale features to have similar magnitudes (very important!)
-        skin_features = skin_features / (torch.norm(skin_features, dim=1, keepdim=True) + 1e-8)
-        melanoma_features = melanoma_features / (torch.norm(melanoma_features, dim=1, keepdim=True) + 1e-8)
-        
-        # Concatenate features with relative importance weighting
-        # Give melanoma features slightly more weight 
-        combined_features = torch.cat((skin_features * 0.8, melanoma_features * 1.2), dim=1)
-        
-        # Pass through the combined classifier
-        output = self.combined_classifier(combined_features)
-        return output
-
-class EnsembleModel(nn.Module):
-    def __init__(self, models, weights=None):
-        super(EnsembleModel, self).__init__()
-        self.models = nn.ModuleList(models)
-        
-        # Normalize weights
-        if weights is None:
-            self.weights = torch.ones(len(models))/len(models)
-        else:
-            sum_weights = sum(weights)
-            self.weights = torch.tensor([w/sum_weights for w in weights])
-    
-    def forward(self, x):
-        outputs = []
-        
-        for i, model in enumerate(self.models):
-            outputs.append(model(x) * self.weights[i])
-        
-        return sum(outputs)
-
-
-def create_and_evaluate_ensemble(models, test_loader, weights=None):
-    """Create and evaluate an ensemble model"""
-    # Create ensemble
-    ensemble = EnsembleModel(models, weights)
-    device = next(ensemble.parameters()).device
-    ensemble.to(device)
-    ensemble.eval()
-    
-    # Evaluate
-    criterion = FocalLoss(gamma=2.0, alpha=0.75)
-    
-    with torch.no_grad():
-        losses = []
-        all_preds = []
-        all_labels = []
-        
-        for images, labels in test_loader:
-            images = images.to(device)
-            labels = labels.to(device)
-            
-            outputs = ensemble(images)
-            loss = criterion(outputs, labels)
-            losses.append(loss.item())
-            
-            # Get predictions (use threshold of 0.3 as in your code)
-            preds = (torch.sigmoid(outputs) > 0.25).float().cpu().numpy()
-            all_preds.extend(preds)
-            all_labels.extend(labels.cpu().numpy())
-        
-        # Calculate metrics
-        all_preds = np.array(all_preds).flatten()
-        all_labels = np.array(all_labels).flatten()
-        
-        accuracy = accuracy_score(all_labels, all_preds)
-        precision = precision_score(all_labels, all_preds, zero_division=0)
-        recall = recall_score(all_labels, all_preds, zero_division=0)
-        f1 = f1_score(all_labels, all_preds, zero_division=0)
-    
-    # Create results dictionary
-    ensemble_results = {
-        'test_loss': float(np.mean(losses)),
-        'test_accuracy': float(accuracy),
-        'test_precision': float(precision),
-        'test_recall': float(recall),
-        'test_f1': float(f1)
-    }
-    
-    # Save ensemble results
-    ensemble_path = os.path.join("trained_model", f"combined_model_test{TEST_NUMBER}_ensemble")
-    os.makedirs(ensemble_path, exist_ok=True)
-    
-    import json
-    with open(os.path.join(ensemble_path, "ensemble_results.json"), 'w') as f:
-        json.dump(ensemble_results, f, indent=4)
-    
-    return ensemble, ensemble_results
-
-def evaluate_model(model, dataloader, criterion):
-    """Evaluate model on dataloader"""
-    model.eval()
-    device = next(model.parameters()).device
-    
-    with torch.no_grad():
-        losses = []
-        all_preds = []
-        all_labels = []
-        
-        for images, labels in dataloader:
-            images = images.to(device)
-            labels = labels.to(device)
-            
-            outputs = model(images)
-            loss = criterion(outputs, labels)
-            losses.append(loss.item())
-            
-            # Get predictions
-            preds = torch.sigmoid(outputs) > 0.5
-            all_preds.extend(preds.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
-        
-        # Calculate metrics
-        all_preds = np.array(all_preds).flatten()
-        all_labels = np.array(all_labels).flatten()
-        
-        accuracy = accuracy_score(all_labels, all_preds)
-        precision = precision_score(all_labels, all_preds, zero_division=0)
-        recall = recall_score(all_labels, all_preds, zero_division=0)
-        f1 = f1_score(all_labels, all_preds, zero_division=0)
-        
-    return np.mean(losses), (accuracy, precision, recall, f1)
+TEST_NUMBER = 1
 
 # Dataset class from your existing code
 class CachedMelanomaDataset(Dataset):
@@ -632,6 +422,7 @@ class MelanomaModelTrainer:
         # Define loss function
         #self.criterion = nn.BCEWithLogitsLoss()
         self.criterion = FocalLoss(gamma=2.0, alpha=0.75)
+        #self.criterion = FocalLoss(gamma=4.0, alpha=0.85)
         
         # Initialize history for tracking metrics
         self.history = {
@@ -676,10 +467,10 @@ class MelanomaModelTrainer:
         Train the modified melanoma model using a two-phase approach with early stopping
         """
         # Phase 1: Train only the classifier
-        optimizer_phase1 = optim.AdamW(self.model.efficientnet.classifier.parameters(), lr=self.learning_rate, weight_decay=0.01)
+        optimizer_phase1 = optim.AdamW(self.model.parameters(), lr=self.learning_rate, weight_decay=0.05)
         
         # Phase 2: Fine-tune the whole model
-        optimizer_phase2 = optim.AdamW(self.model.parameters(), lr=self.learning_rate/10, weight_decay=0.01)
+        optimizer_phase2 = optim.AdamW(self.model.parameters(), lr=self.learning_rate/10, weight_decay=0.05)
         
         # Learning rate scheduler for phase 2
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -693,7 +484,7 @@ class MelanomaModelTrainer:
         # Initialize early stopping for Phase 1
         
         early_stopping_phase1 = EarlyStopping(
-            patience=15,  # Increase from 10
+            patience=10,  # Increase from 10
             verbose=True,
             delta=0.001,
             path=os.path.join(save_dir, 'checkpoint_phase1.pth'),
@@ -703,7 +494,7 @@ class MelanomaModelTrainer:
         
         # Initialize early stopping for Phase 2
         early_stopping_phase2 = EarlyStopping(
-            patience=15,  # Increase from 10
+            patience=10,  # Increase from 10
             verbose=True,
             delta=0.001,
             path=os.path.join(save_dir, 'checkpoint_phase2.pth'),
@@ -725,7 +516,7 @@ class MelanomaModelTrainer:
         
         # Freeze the backbone
         for param in self.model.efficientnet.features.parameters():
-            param.requires_grad = False
+            param.requires_grad = True
         
         for epoch in range(phase1_epochs):
             print(f"\nPhase 1 - Epoch {epoch+1}/{phase1_epochs}")
@@ -748,7 +539,7 @@ class MelanomaModelTrainer:
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 best_model_state = self._create_model_state_dict(
-                    epoch+1, train_loss, val_loss, train_metrics, val_metrics
+                    epoch+1, train_loss, val_loss, train_metrics, val_metrics, optimizer_phase1
                 )
             
             # Early stopping check
@@ -804,7 +595,7 @@ class MelanomaModelTrainer:
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
                     best_model_state = self._create_model_state_dict(
-                        epoch+1, train_loss, val_loss, train_metrics, val_metrics
+                        epoch+1, train_loss, val_loss, train_metrics, val_metrics, optimizer_phase2
                     )
                 
                 # Early stopping check
@@ -894,7 +685,7 @@ class MelanomaModelTrainer:
                 losses.append(loss.detach().cpu().numpy())
 
                 # Get predictions
-                preds = (torch.sigmoid(predicted_data) > 0.25).float().cpu().numpy()
+                preds = (torch.sigmoid(predicted_data) > 0.3).float().cpu().numpy()
                 all_preds.extend(preds)
                 all_labels.extend(labels.cpu().numpy())
 
@@ -930,13 +721,14 @@ class MelanomaModelTrainer:
         print(f"Train Acc: {train_metrics[0]:.4f}, Prec: {train_metrics[1]:.4f}, Rec: {train_metrics[2]:.4f}, F1: {train_metrics[3]:.4f}")
         print(f"Val Acc: {val_metrics[0]:.4f}, Prec: {val_metrics[1]:.4f}, Rec: {val_metrics[2]:.4f}, F1: {val_metrics[3]:.4f}")
     
-    def _create_model_state_dict(self, epoch, train_loss, val_loss, train_metrics, val_metrics):
+    def _create_model_state_dict(self, epoch, train_loss, val_loss, train_metrics, val_metrics, optimizer):
         """Create a state dictionary for saving the model"""
         model_state = {
             'time': str(datetime.datetime.now()),
             'model_state': self.model.state_dict(),
             'model_name': type(self.model).__name__,
-            'optimizer_name': 'Adam',
+            'optimizer_name': 'AdamW',
+            'optimizer_state_dict': optimizer.state_dict(),
             'epoch': epoch,
             'train_loss': train_loss,
             'val_loss': val_loss,
@@ -1130,7 +922,7 @@ class MelanomaModelTrainer:
                 
                 # Get model predictions
                 outputs = self.model(images)
-                preds = (torch.sigmoid(outputs) > 0.25).float().cpu().numpy()
+                preds = (torch.sigmoid(outputs) > 0.3).float().cpu().numpy()
                 
                 # Flatten labels
                 labels = labels.cpu().numpy().flatten()
@@ -1209,7 +1001,7 @@ class CombinedModelTrainer:
             skin_state_dict = torch.load(skin_model_path, map_location=self.device)
             
             # Initialize the model
-            self.skin_model = AttentionSkinToneClassifier(num_classes=7)
+            self.skin_model = EfficientNetB3SkinToneClassifier(num_classes=7)
             
             # Check and load state dict
             if isinstance(skin_state_dict, dict):
@@ -1241,7 +1033,7 @@ class CombinedModelTrainer:
         except Exception as e:
             print(f"Error loading skin tone classifier: {e}")
             # Fallback: create a new model
-            self.skin_model = AttentionSkinToneClassifier(num_classes=7)
+            self.skin_model = EfficientNetB3SkinToneClassifier(num_classes=7)
             self.skin_model = self.skin_model.to(self.device)
             self.skin_model.eval()
             print("Created a new skin tone classifier model")
@@ -1353,9 +1145,10 @@ class CombinedModelTrainer:
         # Define loss function
         #self.criterion = nn.BCEWithLogitsLoss()
         self.criterion = FocalLoss(gamma=2.0, alpha=0.75)
+        #self.criterion = FocalLoss(gamma=4.0, alpha=0.85)
 
         # Initialize optimizer (only for the combined classifier)
-        self.optimizer = optim.AdamW(self.combined_model.combined_classifier.parameters(), lr=learning_rate, weight_decay=0.01)
+        self.optimizer = optim.AdamW(self.combined_model.parameters(), lr=learning_rate, weight_decay=0.01)
         
         # Initialize scheduler
         #self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -1393,7 +1186,7 @@ class CombinedModelTrainer:
         
         # Initialize early stopping
         early_stopping = EarlyStopping(
-            patience=15,  # Increase from 10
+            patience=10,  # Increase from 10
             verbose=True,
             delta=0.001,
             path=os.path.join(save_dir, 'checkpoint.pth'),
@@ -1437,7 +1230,7 @@ class CombinedModelTrainer:
             if val_f1 > best_val_f1:
                 best_val_f1 = val_f1
                 best_model_state = self._create_model_state_dict(
-                    epoch+1, train_loss, val_loss, train_metrics, val_metrics
+                    epoch+1, train_loss, val_loss, train_metrics, val_metrics, self.optimizer
                 )
                 print(f"New best F1 score: {best_val_f1:.4f}")
 
@@ -1528,7 +1321,7 @@ class CombinedModelTrainer:
                 losses.append(loss.detach().cpu().numpy())
 
                 # Get predictions
-                preds = (torch.sigmoid(outputs) > 0.25).float().cpu().numpy()
+                preds = (torch.sigmoid(outputs) > 0.3).float().cpu().numpy()
                 all_preds.extend(preds)
                 all_labels.extend(labels.cpu().numpy())
 
@@ -1564,13 +1357,14 @@ class CombinedModelTrainer:
         print(f"Train Acc: {train_metrics[0]:.4f}, Prec: {train_metrics[1]:.4f}, Rec: {train_metrics[2]:.4f}, F1: {train_metrics[3]:.4f}")
         print(f"Val Acc: {val_metrics[0]:.4f}, Prec: {val_metrics[1]:.4f}, Rec: {val_metrics[2]:.4f}, F1: {val_metrics[3]:.4f}")
 
-    def _create_model_state_dict(self, epoch, train_loss, val_loss, train_metrics, val_metrics):
+    def _create_model_state_dict(self, epoch, train_loss, val_loss, train_metrics, val_metrics, optimizer):
         """Create a state dictionary for saving the model"""
         model_state = {
             'time': str(datetime.datetime.now()),
             'model_state': self.combined_model.state_dict(),
             'model_name': type(self.combined_model).__name__,
-            'optimizer_name': 'Adam',
+            'optimizer_name': 'AdamW',
+            'optimizer_state_dict': optimizer.state_dict(),
             'epoch': epoch,
             'train_loss': train_loss,
             'val_loss': val_loss,
@@ -1715,7 +1509,7 @@ class CombinedModelTrainer:
                 
                 # Get model predictions
                 outputs = self.combined_model(images)
-                preds = (torch.sigmoid(outputs) > 0.25).float().cpu().numpy()
+                preds = (torch.sigmoid(outputs) > 0.3).float().cpu().numpy()
                 
                 # Flatten labels
                 labels = labels.cpu().numpy().flatten()
@@ -1822,148 +1616,6 @@ class CombinedModelTrainer:
             return test_results
 
 
-def save_combined_model_summary(combined_model, filename='combined_model_summary.txt'):
-    """
-    Save a detailed summary of the combined transfer learning model to a text file
-    
-    Args:
-        combined_model (CombinedTransferModel): The combined model to analyze
-        filename (str): Name of the output text file
-    """
-    # Ensure the directory exists
-    os.makedirs('model_summaries', exist_ok=True)
-    filepath = os.path.join('model_summaries', filename)
-    
-    # Redirect stdout to file
-    with open(filepath, 'w') as f:
-        # Capture original stdout
-        import sys
-        original_stdout = sys.stdout
-        
-        # Redirect stdout to file
-        sys.stdout = f
-        
-        try:
-            print("===== COMBINED TRANSFER LEARNING MODEL SUMMARY =====")
-            print(f"Date: {datetime.datetime.now()}\n")
-            
-            # Overall Model Structure
-            print("1. OVERALL MODEL ARCHITECTURE:")
-            print(str(combined_model))
-            print("\n" + "="*50 + "\n")
-            
-            # Skin Tone Model Details
-            print("2. SKIN TONE MODEL (FEATURE EXTRACTOR):")
-            print("Backbone:", str(combined_model.skin_tone_model.backbone))
-            print("\nAttention Mechanism:")
-            print(str(combined_model.skin_tone_model.attention))
-            print("\nFeature Extractor:")
-            print(str(combined_model.skin_tone_model.feature_extractor))
-            print("\n" + "="*50 + "\n")
-            
-            # Melanoma Model Details
-            print("3. MELANOMA MODEL (FEATURE EXTRACTOR):")
-            print("Backbone:", str(combined_model.melanoma_model.efficientnet))
-            print("\n" + "="*50 + "\n")
-            
-            # Combined Classifier Details
-            print("4. COMBINED CLASSIFIER:")
-            print(str(combined_model.combined_classifier))
-            print("\n" + "="*50 + "\n")
-            
-            # Feature Dimensions
-            print("5. FEATURE DIMENSIONS:")
-            print("Skin Tone Model Features: 256")
-            print("Melanoma Model Features: 128")
-            print("Combined Features: 256 + 128 = 384")
-            print("\n" + "="*50 + "\n")
-            
-            # Model Parameters
-            total_params = sum(p.numel() for p in combined_model.parameters())
-            trainable_params = sum(p.numel() for p in combined_model.parameters() if p.requires_grad)
-            
-            print("6. PARAMETER COUNT:")
-            print(f"Total Parameters: {total_params:,}")
-            print(f"Trainable Parameters: {trainable_params:,}")
-            print(f"Non-Trainable Parameters: {total_params - trainable_params:,}")
-            
-            # Detailed Parameter Breakdown
-            print("\n7. DETAILED PARAMETER BREAKDOWN:")
-            for name, module in combined_model.named_children():
-                print(f"\n{name.upper()} PARAMETERS:")
-                module_params = sum(p.numel() for p in module.parameters())
-                module_trainable_params = sum(p.numel() for p in module.parameters() if p.requires_grad)
-                print(f"  Total Parameters: {module_params:,}")
-                print(f"  Trainable Parameters: {module_trainable_params:,}")
-        
-        finally:
-            # Restore stdout
-            sys.stdout = original_stdout
-    
-    print(f"Model summary saved to {filepath}")
-    return filepath
-
-
-def train_ensemble_models(config, num_models=3, base_melanoma_path=None, base_skin_path=None):
-    """Train multiple models with different configurations for ensemble"""
-    models = []
-    results = []
-    
-    for i in range(num_models):
-        print(f"\n--- Training Ensemble Model {i+1}/{num_models} ---\n")
-        
-        # Create a variant configuration
-        model_config = config.copy()
-        model_config["random_seed"] = 42 + i*10
-        
-        # Vary key hyperparameters
-        lr_variation = 0.8 + 0.4*i/num_models  # 0.8x to 1.2x 
-        model_config["combined_lr"] = config["combined_lr"] * lr_variation
-        
-        # Save to a unique directory
-        ensemble_path = os.path.join("trained_model", f"combined_model_test{TEST_NUMBER}_ensemble{i+1}")
-        os.makedirs(ensemble_path, exist_ok=True)
-        
-        # Set random seed
-        torch.manual_seed(model_config["random_seed"])
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed(model_config["random_seed"])
-        
-        # Create trainer
-        trainer = CombinedModelTrainer(
-            dataset_path=model_config["dataset_path"],
-            csv_file=model_config["csv_file"],
-            img_dir=model_config["img_dir"],
-            batch_size=model_config["combined_batch_size"],
-            num_workers=model_config["num_workers"],
-            skin_model_path=base_skin_path,
-            melanoma_model_path=base_melanoma_path,
-            epochs=model_config["combined_epochs"],
-            learning_rate=model_config["combined_lr"]
-        )
-        
-        # Train model
-        model, result = trainer.train_model()
-        
-        # Save model
-        torch.save(
-            model.state_dict(), 
-            os.path.join(ensemble_path, "ensemble_model.pth")
-        )
-        
-        # Save results
-        import json
-        with open(os.path.join(ensemble_path, "results.json"), 'w') as f:
-            json.dump(result, f, indent=4)
-        
-        # Add to lists
-        models.append(model)
-        results.append(result)
-        
-        # Clear memory
-        clear_gpu_cache()
-    
-    return models, results
 
 # Main function to run the complete pipeline
 def run_transfer_learning_pipeline(config):
@@ -1977,8 +1629,6 @@ def run_transfer_learning_pipeline(config):
     os.makedirs(config["dataset_path"], exist_ok=True)
     os.makedirs(os.path.join("trained_model", "melanoma_classifier"), exist_ok=True)
     os.makedirs(os.path.join("trained_model", "combined_model"), exist_ok=True)
-
-
     
     # Step 1: Train the modified melanoma model with 128-neuron layer
     if config.get("train_melanoma", True):
@@ -2006,7 +1656,7 @@ def run_transfer_learning_pipeline(config):
         trained_melanoma_model, melanoma_results = melanoma_trainer.train_model()
         
         # Set the path to the trained model for the next step
-        melanoma_model_path = os.path.join("trained_model", "melanoma_classifier", "modified_melanoma_model.pth")
+        melanoma_model_path = os.path.join("trained_model", f"feature_extractor_melanoma_classifier_test{TEST_NUMBER}", "modified_melanoma_model.pth")
 
         clear_gpu_cache()
 
@@ -2038,46 +1688,6 @@ def run_transfer_learning_pipeline(config):
         
         # Train the combined model
         trained_combined_model, combined_results = combined_trainer.train_model()
-
-        save_combined_model_summary(trained_combined_model)
-
-        if config.get("use_ensemble", False):
-            print("\n========== PHASE 3: TRAINING ENSEMBLE MODELS ==========\n")
-            
-            clear_gpu_cache()
-            
-            # Call function to train ensemble models
-            ensemble_models, ensemble_results_list = train_ensemble_models(
-                config=config,
-                num_models=config.get("num_ensemble_models", 3),
-                base_melanoma_path=melanoma_model_path,
-                base_skin_path=config["skin_model_path"]
-            )
-            
-            # Create and evaluate the ensemble
-            test_loader = combined_trainer.test_loader  # Reuse the test loader
-            
-            # Get individual F1 scores to use as weights
-            weights = [result['test_f1'] for result in ensemble_results_list]
-            
-            ensemble_model, ensemble_results = create_and_evaluate_ensemble(
-                ensemble_models, 
-                test_loader,
-                weights=weights
-            )
-            
-            # Print ensemble results
-            print("\n========== ENSEMBLE MODEL RESULTS ==========\n")
-            for key, value in ensemble_results.items():
-                if key != 'confusion_matrix':
-                    print(f"  {key}: {value:.4f}")
-            
-            # Compare with single model
-            print("\nEnsemble vs. Single Model Improvement:")
-            for key in combined_results:
-                if key not in ['confusion_matrix', 'test_loss']:
-                    diff = ensemble_results[key] - combined_results[key]
-                    print(f"  {key}: {diff:.4f} ({'+' if diff > 0 else ''}{diff/combined_results[key]*100:.2f}%)")
         
         # Print final results
         print("\n========== FINAL RESULTS ==========\n")
@@ -2125,24 +1735,21 @@ if __name__ == "__main__":
         "img_dir":  os.path.join(DATA_PATH, "train_300X300_processed") ,
         
         # Model paths
-        "skin_model_path": os.path.join(PROJECT_PATH, "trained_model", "skin_type_classifier", "EFNet_b3_300X300_test18", "final_model.pth"),
-        "melanoma_model_path": os.path.join(PROJECT_PATH, "trained_model", "melanoma_classifier_test9", "modified_melanoma_model.pth"), 
+        "skin_model_path": os.path.join(PROJECT_PATH, "trained_model", "skin_type_classifier", "EFNet_b3_300X300_final", "final_model.pth"),
+        "melanoma_model_path": os.path.join(PROJECT_PATH, "trained_model", "feature_extractor_melanoma_classifier_final", "modified_melanoma_model.pth"), 
         
         # Training options
-        "train_melanoma": False,
+        "train_melanoma": True,
         "train_combined": True,
         
         # Training parameters
-        "melanoma_batch_size": 32,
+        "melanoma_batch_size": 30,
         "combined_batch_size": 16,
         "num_workers": 4,
         "melanoma_epochs": 50,
         "combined_epochs": 50,
-        "melanoma_lr": 0.0005,
+        "melanoma_lr": 0.0003,
         "combined_lr": 0.0003,
-
-        "use_ensemble": False,
-        "num_ensemble_models": 3
     }
     
     # Uncomment to run the pipeline
