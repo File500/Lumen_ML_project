@@ -112,6 +112,7 @@ MANIFEST
 /trained_model/melanoma_classifier_test10
 
 /model_summaries
+/script/i.py
 
 
 
