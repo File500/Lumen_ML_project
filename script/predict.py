@@ -1,12 +1,6 @@
-# Surpress warnings:
-def warn(*args, **kwargs):
-    pass
-
-
+# Suppress warnings:
 import warnings
-
-warnings.warn = warn
-
+warnings.filterwarnings("ignore")
 import numpy as np
 import pandas as pd
 import sys
@@ -15,27 +9,26 @@ import PIL
 from pathlib import Path
 from PIL import Image
 import cv2
-
+import argparse
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
+import torchvision.transforms.functional as TF
 import torchvision.datasets as dset
 import torchvision.models as models
 import matplotlib.pylab as plt
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 import json
 from tqdm import tqdm
-
 import torch.nn.functional as F
-import torchvision.transforms as T
-import torchvision.transforms.functional as TF
-
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from model.pretrained_model import PretrainedMelanomaClassifier
+import multiprocessing as mp
 
 # Check if CUDA is available
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"Using device: {device}")
+
+# Add parent directory to path for importing modules
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from model.pretrained_model import PretrainedMelanomaClassifier
 
 
 def mask_dark_pixels_torch(img, threshold=30, inpaint_radius=25):
@@ -55,8 +48,8 @@ def mask_dark_pixels_torch(img, threshold=30, inpaint_radius=25):
         img = img.convert('RGB')
 
     # Convert to tensor (0-1 range) and move to GPU
-    transform = T.Compose([
-        T.ToTensor(),
+    transform = transforms.Compose([
+        transforms.ToTensor(),
     ])
     img_tensor = transform(img).to(device)
 
@@ -129,90 +122,144 @@ def mask_dark_pixels_torch(img, threshold=30, inpaint_radius=25):
     return result
 
 
-def resize_images_torch(image, target_size):
-    img_copy = image.copy()
+class MelanomaDataset(Dataset):
+    """Dataset class for melanoma images with image cleaning"""
 
-    # Clean the image using PyTorch
-    cleaned_img = mask_dark_pixels_torch(img_copy, threshold=70)
+    def __init__(self, img_files, resize_size=(300, 300), clean_images=True,
+                 cleaning_threshold=30, inpaint_radius=25):
+        self.img_files = img_files
+        self.resize_size = resize_size
+        self.clean_images = clean_images
+        self.cleaning_threshold = cleaning_threshold
+        self.inpaint_radius = inpaint_radius
 
-    # Create a transform for resizing, centering, and padding
-    transform = T.Compose([
-        T.Resize(min(target_size)),
-        T.CenterCrop(min(cleaned_img.width, cleaned_img.height)),
-        T.Pad(
-            padding=[(target_size[0] - cleaned_img.width) // 2 if cleaned_img.width < target_size[0] else 0,
-                     (target_size[1] - cleaned_img.height) // 2 if cleaned_img.height < target_size[
-                         1] else 0],
-            fill=0
-        ),
-        T.Resize(target_size)
-    ])
+        #Define normalization as the final step
+        self.normalize = transforms.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225]
+        )
 
-    # Apply transforms
-    final_img = transform(cleaned_img)
-    return final_img
+    def __len__(self):
+        return len(self.img_files)
+
+    def __getitem__(self, idx):
+        img_path = self.img_files[idx]
+        try:
+            # Load image
+            img = Image.open(img_path).convert('RGB')
+            # Clean image if enabled
+            if self.clean_images:
+                img = mask_dark_pixels_torch(
+                    img,
+                    threshold=self.cleaning_threshold,
+                    inpaint_radius=self.inpaint_radius
+                )
+
+            # Resize image
+            img = transforms.Resize(self.resize_size)(img)
+
+            # Convert to tensor
+            img_tensor = transforms.ToTensor()(img)
+
+            # Normalize
+            img_tensor = self.normalize(img_tensor)
+
+            return img_tensor, img_path.stem
+
+        except Exception as e:
+            print(f"Error processing {img_path}: {e}")
+            # Return a placeholder tensor and the filename
+            return torch.zeros((3, self.resize_size[0], self.resize_size[1])), img_path.stem
 
 
-def analyse_folder_data(jpg_files, test_data) -> pd.DataFrame:
-    device = torch.device("cpu")
+def analyse_folder_data_batch(jpg_files, test_data, batch_size=32, num_workers=4,
+                              clean_images=True, cleaning_threshold=30) -> pd.DataFrame:
+    """Analyze images in a folder and make predictions using batch processing"""
+    current_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+    project_path = current_dir.parent
 
     solution = pd.DataFrame(columns=['image_name', 'model_prediction'])
-    model_path = "../trained_model/melanoma_classifier/best-model.pth"
+    model_path = project_path / "trained_model" / "melanoma_classifier" / "best-model.pth"
 
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    project_path = os.path.dirname(current_dir)
-    config_file_path = os.path.join(project_path, "config.json")
+    resize_size = (300,300)
+    binary_mode = True
+    num_classes = 2
 
-    with open(config_file_path, "r") as config_file:
-        config_dict = json.load(config_file)
-
-    resize_size = (config_dict.get("RESIZE_WIDTH"), config_dict.get("RESIZE_HIGHT"))
-    print(f"Cleaning and resizing images to {resize_size[0]}x{resize_size[1]} pixels and making predictions...")
-    print(f"Using device: {device}")
-    binary_mode = config_dict.get("BINARY_MODE", True)
-    num_classes = 2  # Keep as 2 for the model definition
+    # Load model
+    if not model_path.exists():
+        print(f"ERROR: Model file not found at {model_path}")
+        return solution
 
     model = PretrainedMelanomaClassifier(num_classes=num_classes, binary_mode=binary_mode)
     checkpoint = torch.load(model_path, map_location=device)
     model.load_state_dict(checkpoint['model_state'])
+    model = model.to(device)
     model.eval()
-    
+    clean_images = True
+    #print(f"Creating dataset with image cleaning={clean_images}, threshold={cleaning_threshold}")
+
+    # Create dataset and dataloader
+    dataset = MelanomaDataset(
+        jpg_files,
+        resize_size=resize_size,
+        clean_images=clean_images,
+        cleaning_threshold=cleaning_threshold
+    )
+
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True
+    )
+
+    # Disable gradient computation for the entire process
+    torch.set_grad_enabled(False)
+
+    results = []
+
+    # Process batches
+    print(f"Processing {len(jpg_files)} images in batches of {batch_size}...")
+
     with torch.no_grad():
-        for jpg_file in tqdm(jpg_files):
-            try:
+        for batch_images, batch_filenames in tqdm(dataloader):
+            # Move batch to device
+            batch_images = batch_images.to(device)
 
-                current_image = Image.open(jpg_file).convert("RGB")
-                cleaned_image = resize_images_torch(current_image, resize_size)
+            # Get predictions
+            outputs = model(batch_images)
 
-                if test_data.size != 0:
-                    image_metadata = test_data.loc[test_data.image == jpg_file.stem]
+            # Handle predictions based on model output
+            if len(outputs.shape) == 1 or outputs.shape[1] == 1:  # Binary with single output
+                probs = torch.sigmoid(outputs)
+                preds = (probs > 0.6).float().cpu().numpy()
+            else:  # Multi-class with multiple outputs
+                preds = torch.argmax(outputs, dim=1).cpu().numpy()
 
-                transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
-                # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            # Collect results
+            for i, filename in enumerate(batch_filenames):
+                results.append({
+                    'image_name': filename,
+                    'model_prediction': int(preds[i])
+                })
 
-                composed_image_tensor = transform(cleaned_image).unsqueeze(0).to(device)
+    # Convert results to DataFrame
+    solution = pd.DataFrame(results)
 
-                
-                predicted_data = model(composed_image_tensor)
-
-                # Handle predictions based on model output
-                if len(predicted_data.shape) == 1 or predicted_data.shape[1] == 1:  # Binary with single output
-                    preds = torch.sigmoid(predicted_data)
-                    preds = (preds > 0.6).float().cpu().numpy()
-                else:  # Multi-class with multiple outputs
-                    preds = torch.argmax(predicted_data, dim=1, keepdim=True).detach().numpy()
-
-                # print(int(preds[0, 0]))
-                solution.loc[len(solution)] = [jpg_file.stem, int(preds[0, 0])]
-
-            except Exception as e:
-                print(f"Error processing {jpg_file.name}: {e}")
-                continue
+    # Print summary
+    malignant_count = sum(solution['model_prediction'] == 1)
+    benign_count = sum(solution['model_prediction'] == 0)
+    print("\n===== Prediction Summary =====")
+    print(f"Total images processed: {len(solution)}")
+    print(f"Benign predictions (0): {benign_count} ({benign_count / len(solution) * 100:.1f}%)")
+    print(f"Malignant predictions (1): {malignant_count} ({malignant_count / len(solution) * 100:.1f}%)")
 
     return solution
 
 
 def read_folder_data(folder):
+    """Read image files and optional CSV data from a folder"""
     folder = Path(folder)
     csv_file = None
     test_data = pd.DataFrame()
@@ -223,42 +270,72 @@ def read_folder_data(folder):
             break
 
     if csv_file is None:
-        print("No CSV file found in the folder")
+        print("")
     else:
         try:
             test_data = pd.read_csv(csv_file)
             print(f"Loaded CSV file: {csv_file.name}")
         except Exception as e:
             print(f"Error loading CSV file: {e}")
-            return
+            return test_data, []
 
     jpg_files = sorted([f for f in folder.iterdir() if f.is_file() and f.suffix.lower() in ['.jpg', '.jpeg']])
+    print(f"Found {len(jpg_files)} images in {folder}")
 
     return test_data, jpg_files
 
 
 def main():
-    if len(sys.argv) != 3:
-        print("Usage: python script.py <folder_path> <csv_filename>")
+    """Main function to run predictions with argument parsing"""
+    parser = argparse.ArgumentParser(description="Process test images for prediction.")
+    parser.add_argument("--local", action="store_true", help="Use predefined local test images.")
+    parser.add_argument("--uploaded", action="store_true", help="Use uploaded image folder.")
+    parser.add_argument("--batch_size", type=int, default=16, help="Batch size for processing")
+    parser.add_argument("--num_workers", type=int, default=2, help="Number of worker processes for data loading")
+    parser.add_argument("--clean_images", action="store_true", help="Enable image cleaning")
+    parser.add_argument("--cleaning_threshold", type=int, default=30, help="Darkness threshold for cleaning (0-255)")
+    args = parser.parse_args()
+
+    # Get current directory paths
+    current_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+    project_path = current_dir.parent
+    data_path = project_path / "data"
+    output_csv = data_path / "Test_predictions.csv"
+    # Determine folder path based on arguments
+    if args.local:
+        folder_path = data_path / "ISIC_2020_Test_Input"
+    elif args.uploaded:
+        folder_path = data_path / "uploaded_images"
+
+    else:
+        print("Error: You must specify either --local or --uploaded")
         sys.exit(1)
 
-    ## add for final solution (now the full path needs to be passed to function) -> folder_path = ./ + folder_path 
-    folder_path = sys.argv[1]
-    csv_filename_output = sys.argv[2]
+    csv_filename_output = output_csv
 
-    if not os.path.isdir(folder_path):
+    if not folder_path.exists():
         print(f"Error: Folder '{folder_path}' does not exist")
         sys.exit(1)
 
     test_df, jpg_files = read_folder_data(folder_path)
 
-    solution_data = analyse_folder_data(jpg_files, test_df)
+    # Use the optimized batch processing function
+    solution_data = analyse_folder_data_batch(
+        jpg_files,
+        test_df,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        clean_images=args.clean_images,
+        cleaning_threshold=args.cleaning_threshold
+    )
 
-    solution_data.to_csv(path_or_buf=f"./{csv_filename_output}", index=False)
-
-    print(f"Saved solutions to {csv_filename_output}")
+    # Save results
+    output_path = Path(csv_filename_output)
+    solution_data.to_csv(path_or_buf=output_path, index=False)
+    print(f"Saved solutions to {output_path}")
 
 
 if __name__ == "__main__":
+    mp.set_start_method('spawn')
     main()
     print("Done!")
