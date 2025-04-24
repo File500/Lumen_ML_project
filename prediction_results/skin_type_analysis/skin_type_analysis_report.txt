@@ -1,0 +1,92 @@
+===== SKIN TYPE ANALYSIS REPORT =====
+
+OVERALL SUMMARY:
+--------------------------------------------------
+Total samples analyzed: 5766
+Number of skin types: 7
+
+Best performing skin type: 2 (Accuracy: 0.9814)
+Worst performing skin type: 3 (Accuracy: 0.9656)
+
+Skin type with highest false positive rate: 7 (Rate: 0.0208)
+Skin type with highest false negative rate: 3 (Rate: 0.2105)
+
+DETAILED METRICS BY SKIN TYPE:
+--------------------------------------------------
+SKIN TYPE 1:
+  Sample count: 1490.0
+  Class distribution: 973.0 benign (65.3%), 517.0 malignant (34.7%)
+  Accuracy: 0.9758
+  Precision: 0.9744
+  Recall: 0.9555
+  F1 Score: 0.9648
+  Confusion Matrix: [TN=960.0, FP=13.0, FN=23.0, TP=494.0]
+  False Positive Rate: 0.0134
+  False Negative Rate: 0.0445
+
+SKIN TYPE 2:
+  Sample count: 1077.0
+  Class distribution: 1022.0 benign (94.9%), 55.0 malignant (5.1%)
+  Accuracy: 0.9814
+  Precision: 0.8182
+  Recall: 0.8182
+  F1 Score: 0.8182
+  Confusion Matrix: [TN=1012.0, FP=10.0, FN=10.0, TP=45.0]
+  False Positive Rate: 0.0098
+  False Negative Rate: 0.1818
+
+SKIN TYPE 3:
+  Sample count: 931.0
+  Class distribution: 836.0 benign (89.8%), 95.0 malignant (10.2%)
+  Accuracy: 0.9656
+  Precision: 0.8621
+  Recall: 0.7895
+  F1 Score: 0.8242
+  Confusion Matrix: [TN=824.0, FP=12.0, FN=20.0, TP=75.0]
+  False Positive Rate: 0.0144
+  False Negative Rate: 0.2105
+
+SKIN TYPE 4:
+  Sample count: 875.0
+  Class distribution: 765.0 benign (87.4%), 110.0 malignant (12.6%)
+  Accuracy: 0.9691
+  Precision: 0.8807
+  Recall: 0.8727
+  F1 Score: 0.8767
+  Confusion Matrix: [TN=752.0, FP=13.0, FN=14.0, TP=96.0]
+  False Positive Rate: 0.0170
+  False Negative Rate: 0.1273
+
+SKIN TYPE 5:
+  Sample count: 1071.0
+  Class distribution: 949.0 benign (88.6%), 122.0 malignant (11.4%)
+  Accuracy: 0.9683
+  Precision: 0.9151
+  Recall: 0.7951
+  F1 Score: 0.8509
+  Confusion Matrix: [TN=940.0, FP=9.0, FN=25.0, TP=97.0]
+  False Positive Rate: 0.0095
+  False Negative Rate: 0.2049
+
+SKIN TYPE 6:
+  Sample count: 256.0
+  Class distribution: 224.0 benign (87.5%), 32.0 malignant (12.5%)
+  Accuracy: 0.9766
+  Precision: 0.8824
+  Recall: 0.9375
+  F1 Score: 0.9091
+  Confusion Matrix: [TN=220.0, FP=4.0, FN=2.0, TP=30.0]
+  False Positive Rate: 0.0179
+  False Negative Rate: 0.0625
+
+SKIN TYPE 7:
+  Sample count: 66.0
+  Class distribution: 48.0 benign (72.7%), 18.0 malignant (27.3%)
+  Accuracy: 0.9697
+  Precision: 0.9444
+  Recall: 0.9444
+  F1 Score: 0.9444
+  Confusion Matrix: [TN=47.0, FP=1.0, FN=1.0, TP=17.0]
+  False Positive Rate: 0.0208
+  False Negative Rate: 0.0556
+

@@ -1,0 +1,9 @@
+Model	        Input Resolution	FLOPs	Parameters
+EfficientNet-B0	    224×224	        0.4B	5.3M
+EfficientNet-B1	    240×240	        0.7B	7.8M
+EfficientNet-B2	    260×260	        1.0B	9.2M
+EfficientNet-B3	    300×300	        1.8B	12.0M
+EfficientNet-B4	    380×380	        4.2B	19.0M
+EfficientNet-B5	    456×456	        9.9B	30.0M
+EfficientNet-B6	    528×528	       19.0B	43.0M
+EfficientNet-B7	    600×600	       37.0B	66.0M
