@@ -301,15 +301,17 @@ def main():
     project_path = current_dir.parent
     data_path = project_path / "data"
     output_csv = data_path / "Test_predictions.csv"
-    # Determine folder path based on arguments
-    if args.local:
-        folder_path = data_path / "ISIC_2020_Test_Input"
-    elif args.uploaded:
-        folder_path = data_path / "uploaded_images"
+    folder_path = data_path / "uploaded_images"
 
-    else:
-        print("Error: You must specify either --local or --uploaded")
-        sys.exit(1)
+    # # Determine folder path based on arguments
+    # if args.local:
+    #     folder_path = data_path / "ISIC_2020_Test_Input"
+    # elif args.uploaded:
+    #     folder_path = data_path / "uploaded_images"
+    #
+    # else:
+    #     print("Error: You must specify either --local or --uploaded")
+    #     sys.exit(1)
 
     csv_filename_output = output_csv
 

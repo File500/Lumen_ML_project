@@ -232,17 +232,17 @@ def main():
         "threshold": 0.3
     }
 
-    output_csv =DATA_PATH / "Test_predictions_combined.csv"
+    output_csv =DATA_PATH / "Test_predictions.csv"
+    folder_path = DATA_PATH / "uploaded_images"
 
     # Determine folder path based on arguments
-    if args.local:
-        folder_path = DATA_PATH / "ISIC_2020_Test_Input"
-    elif args.uploaded:
-        folder_path = DATA_PATH / "uploaded_images"
-
-    else:
-        print("Error: You must specify either --local or --uploaded")
-        sys.exit(1)
+    # if args.local:
+    #     folder_path = DATA_PATH / "ISIC_2020_Test_Input"
+    # elif args.uploaded:
+    #     folder_path = DATA_PATH / "uploaded_images"
+    # else:
+    #     print("Error: You must specify either --local or --uploaded")
+    #     sys.exit(1)
 
     # Settings
     batch_size = 32  # Adjust based on your GPU memory
