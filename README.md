@@ -118,6 +118,7 @@ A machine learning project for image prediction and analysis.
 <blockquote>
 ⚠️ Make sure you have <a href="https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html">nvidia-container-toolkit</a> installed in your local environment to be able to use GPU inside the Docker container.
 </blockquote>
+
 1. First load docker image to your local environment
    ```shell
    docker load -i melanoma_predict.tar
