@@ -114,7 +114,7 @@ A machine learning project for image prediction and analysis.
 
 ## Running the Predictor Script - from Docker
 </div>
-> ⚠️ Make sure you have [nvidia-container-toolkit](https://example.com](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) installed in local environment to be able to use GPU inside docker container.
+> ⚠️ Make sure you have [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) installed in local environment to be able to use GPU inside docker container.
 
 
 1. First load docker image to your local environment
